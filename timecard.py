@@ -33,7 +33,7 @@ def find_display(max_n=9):
 def get_active_window():
     window_id = subprocess.check_output(['xprop', '-root', '-f', '_NET_ACTIVE_WINDOW', '0x', r' $0\n', '_NET_ACTIVE_WINDOW']).split()[1]
     window_title = ' '.join(subprocess.check_output(['xprop', '-id', str(window_id), '-f', '_NET_WM_NAME', '0s', r' $0\n', '_NET_WM_NAME']).split()[1:]).strip('"')
-    return int(window_id, 16), window_title
+    return window_title
 
 def get_lock(lockfilename):
     if not os.path.isfile(lockfilename):
@@ -99,8 +99,10 @@ def take_screenshot():
     sz = w.get_size()
     pb = gtk.gdk.Pixbuf(gtk.gdk.COLORSPACE_RGB,False,8,sz[0],sz[1])
     pb = pb.get_from_drawable(w,w.get_colormap(),0,0,0,0,sz[0],sz[1])
+    pb = pb.subpixbuf(0, 0, 1920, 1200)
+    pb = pb.scale_simple(int(1920/1.25), int(1200/1.25), gtk.gdk.INTERP_BILINEAR)
     if (pb != None):
-        pb.save(os.path.join(args.screenshots, "%s.png" % (get_current_timestamp(compact=True))), "png", 9)
+        pb.save(os.path.join(args.screenshots, "%s.png" % (get_current_timestamp(compact=True))), "png", {'compression': '9'})
         return True
     else:
         return False
@@ -185,9 +187,6 @@ elif args.command == 'list':
 
 elif args.command == 'test':
     print args
-    wid, wname = get_active_window()
-    print wid
-    w = gtk.gdk.window_lookup(wid)
-    print w
+    take_screenshot()
 
 
