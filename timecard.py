@@ -7,11 +7,13 @@ Records time usage for e.g. billable time and proof of work.
 
 import sys
 import os
+import logging
 import signal
 import subprocess
 import time
 import argparse
 import datetime
+import re
 from dateutil import parser as dateparser
 import gtk.gdk
 
@@ -33,7 +35,7 @@ def find_display(max_n=9):
 def get_active_window():
     window_id = subprocess.check_output(['xprop', '-root', '-f', '_NET_ACTIVE_WINDOW', '0x', r' $0\n', '_NET_ACTIVE_WINDOW']).split()[1]
     window_title = ' '.join(subprocess.check_output(['xprop', '-id', str(window_id), '-f', '_NET_WM_NAME', '0s', r' $0\n', '_NET_WM_NAME']).split()[1:]).strip('"')
-    return int(window_id, 16), window_title
+    return window_title
 
 def get_lock(lockfilename):
     if not os.path.isfile(lockfilename):
@@ -67,26 +69,62 @@ def format_timestamp(dt, compact=False):
 def get_current_timestamp(compact=False):
     return format_timestamp(datetime.datetime.now(), compact=compact)
 
+def parse_timerange(timerange):
+	timerange = timerange.split('-')
+	if len(timerange) == 1:
+		timerange.append('now')
+	timestamp_range = []
+	for item in timerange:
+		if item == 'now':
+			timestamp_range.append(datetime.datetime.now())
+		elif re.match(r'(\d+[wdh])+', item):
+			quanta = filter(len, re.split(r'(\d+[wdh])', item))
+			quanta = {q[-1]: int(q[:-1]) for q in quanta}
+			for k in ('w', 'd', 'h'):
+				if k not in quanta:
+					quanta[k] = 0
+			quanta['d'] = quanta['w']*7 + quanta['d']
+			quanta['s'] = quanta['h']*24*60*60
+			delta = datetime.timedelta(days=quanta['d'], seconds=quanta['s'])
+			timestamp_range.append(datetime.datetime.now() - delta)
+		else:
+			try:
+				timestamp_range.append(datetime.datetime.fromtimestamp(int(item)))
+				continue
+			except ValueError:
+				pass
+			try:
+				timestamp_range.append(dateparser.parse(item))
+			except ValueError:
+				raise ValueError, "unknown date format"
+	timestamp_range.sort()
+	return timestamp_range
+		
+
 def start_log():
     global args
     f = open(args.file, 'a')
     print >>f, "-- Starting log at %s --" % (get_current_timestamp())
+    logger.debug("-- Starting log at %s --", get_current_timestamp())
     f.close()
 
 def monitor():
     global args
     f = open(args.file, 'a')
     print >>f, "%s: %s" % (get_current_timestamp(), get_active_window())
+    logger.debug("%s: %s", get_current_timestamp(), get_active_window())
     f.close()
 
 def close_log():
     global args
     f = open(args.file, 'a')
     print >>f, "-- Closing log at %s --" % (get_current_timestamp())
+    logger.debug("-- Closing log at %s --", get_current_timestamp())
     f.close()
 
 def stop_monitoring(signum, frame):
-    if signum == signal.SIGTERM:
+    if signum == signal.SIGTERM or (signum == signal.SIGINT and args.verbose >= 2):
+        logger.debug("Got %s." % ("SIGTERM" if signum==signal.SIGTERM else "SIGINT"))
         close_log()
         if release_lock(args.lockfile):
             sys.exit(0)
@@ -95,16 +133,21 @@ def stop_monitoring(signum, frame):
             sys.exit(1)
 
 def take_screenshot():
+    logger.debug("Taking screenshot.")
     w = gtk.gdk.get_default_root_window()
     sz = w.get_size()
     pb = gtk.gdk.Pixbuf(gtk.gdk.COLORSPACE_RGB,False,8,sz[0],sz[1])
     pb = pb.get_from_drawable(w,w.get_colormap(),0,0,0,0,sz[0],sz[1])
+    #pb = pb.subpixbuf(0, 0, 1920, 1200)
+    #pb = pb.scale_simple(int(1920/1.25), int(1200/1.25))
+    pb = pb.scale_simple(int(sz[0]/1.25), int(sz[1]/1.25))
     if (pb != None):
-        pb.save(os.path.join(args.screenshots, "%s.png" % (get_current_timestamp(compact=True))), "png", 9)
+        pb.save(os.path.join(args.screenshots, "%s.png" % (get_current_timestamp(compact=True))), "png", {'compression': '9'})
         return True
     else:
         return False
 
+logger = logging.getLogger(__name__)
 
 # If called from cron, find first display.
 if not 'DISPLAY' in os.environ:
@@ -113,7 +156,7 @@ if not 'DISPLAY' in os.environ:
 commands = ["start", "stop", "list", "analyze", "test"]
 
 argparser = argparse.ArgumentParser(description="Record or analyze time usage.")
-argparser.add_argument('-v', '--verbose', action='count')
+argparser.add_argument('-v', '--verbose', action='count', default=0, help="Display debug messages. -vv will disable forking.")
 argparser.add_argument('-f', '--file', metavar='file', default='timecard.log', help='Time log file.')
 argparser.add_argument('-l', '--lockfile', metavar='lockfile', default='timecard.lock', help='Lock file name.')
 argparser.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None, const='screenshots', help='Take screenshots with every log entry. Optional: directory to store screenshots (default is screenshots/).')
@@ -122,42 +165,71 @@ argparser.add_argument('command', choices=commands)
 argparser.add_argument('timerange', nargs='?', help='Time range for list command.')
 args = argparser.parse_args()
 
+debuglevel = {
+    0: logging.ERROR,
+    1: logging.INFO,
+    2: logging.DEBUG
+}
+
+logger.setLevel(debuglevel[args.verbose])
+ch = logging.StreamHandler()
+ch.setLevel(debuglevel[args.verbose])
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+logger.addHandler(ch)
+
+logger.debug(args)
+
 if args.command == 'start':
+    
     if get_lock(args.lockfile):
-        print >>sys.stderr, "Timecard is already locked."
+        logger.error("Timecard is already locked.")
         sys.exit(1)
     
-    pid = os.fork()
-    if pid > 0:
-        #print "Parent reports child pid=%d" % pid
-        if not lock_timecard(pid, args.lockfile):
-            os.kill(pid, signal.SIGTERM)
-            print >>sys.stderr, "Unable to create lock file."
+    if args.verbose >= 2:
+        if not lock_timecard(os.getpid(), args.lockfile):
+            logger.error("Unable to create lock file.")
             sys.exit(1)
         print "Clocked in at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
-        sys.exit(0)
+    else:
+        pid = os.fork()
+        if pid > 0:
+            logger.debug("Parent reports child pid=%d", pid)
+            if not lock_timecard(pid, args.lockfile):
+                os.kill(pid, signal.SIGTERM)
+                logger.error("Unable to create lock file.")
+                sys.exit(1)
+            print "Clocked in at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
+            sys.exit(0)
     
     # Child process - this will do the monitoring
     # Give the parent a chance to do last checks and kill us if needed.
+    logger.debug("Child started.")
     time.sleep(2)
     start_log()
     time.sleep(5)
     signal.signal(signal.SIGTERM, stop_monitoring)
+    if args.verbose >= 2:
+        signal.signal(signal.SIGINT, stop_monitoring)
     while True:
         monitor()
         if args.screenshots:
             take_screenshot()
+        logger.debug("Sleeping %d seconds.", args.interval)
         time.sleep(args.interval)
 
 elif args.command == 'stop':
     pid = get_lock(args.lockfile)
     if not pid:
-        print >>syd.stderr, "Could not get a valid PID from lock file."
+        logger.error("Could not get a valid PID from lock file.")
         sys.exit(1)
+    logger.debug("Killing process %d.", pid)
     os.kill(pid, signal.SIGTERM)
     print "Clocked out at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
 
 elif args.command == 'list':
+    if args.timerange:
+        start_time, end_time = parse_timerange(args.timerange)
     total_log = map(lambda l: l.strip(), open(args.file, 'r').readlines())
     spans = []
     for line in total_log:
@@ -172,6 +244,8 @@ elif args.command == 'list':
         else:
             timestamp = dateparser.parse(':'.join(line.split(':')[:3]))
             spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
+    if args.timerange:
+        spans = filter(lambda s: s[0]>start_time, spans)
     total_hours = 0.0
     for span in spans:
         start_time = span[0][0]
@@ -185,9 +259,6 @@ elif args.command == 'list':
 
 elif args.command == 'test':
     print args
-    wid, wname = get_active_window()
-    print wid
-    w = gtk.gdk.window_lookup(wid)
-    print w
+    take_screenshot()
 
 
