@@ -72,6 +72,12 @@ def start_log():
     f = open(args.file, 'a')
     print >>f, "-- Starting log at %s --" % (get_current_timestamp())
     f.close()
+    
+def write_note(note):
+    global args
+    f = open(args.file, 'a')
+    print >>f, "%s: [Note] %s" % (get_current_timestamp(), note)
+    f.close()
 
 def monitor():
     global args
@@ -86,7 +92,10 @@ def close_log():
     f.close()
 
 def stop_monitoring(signum, frame):
+    global args
     if signum == signal.SIGTERM:
+        if args.note:
+            write_note(args.note)
         close_log()
         if release_lock(args.lockfile):
             sys.exit(0)
@@ -112,7 +121,7 @@ def take_screenshot():
 if not 'DISPLAY' in os.environ:
 	os.environ['DISPLAY'] = find_display()
 
-commands = ["start", "stop", "list", "analyze", "test"]
+commands = ["start", "stop", "note", "list", "analyze", "test"]
 
 argparser = argparse.ArgumentParser(description="Record or analyze time usage.")
 argparser.add_argument('-v', '--verbose', action='count')
@@ -121,7 +130,9 @@ argparser.add_argument('-l', '--lockfile', metavar='lockfile', default='timecard
 argparser.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None, const='screenshots', help='Take screenshots with every log entry. Optional: directory to store screenshots (default is screenshots/).')
 argparser.add_argument('-i', '--interval', metavar='interval', type=int, default=300, help='Seconds between monitor reports.')
 argparser.add_argument('command', choices=commands)
+argparser.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
 argparser.add_argument('timerange', nargs='?', help='Time range for list command.')
+argparser.add_argument('note_arg', nargs='?', help='Note to be recorded with note command.')
 args = argparser.parse_args()
 
 if args.command == 'start':
@@ -143,6 +154,8 @@ if args.command == 'start':
     # Give the parent a chance to do last checks and kill us if needed.
     time.sleep(2)
     start_log()
+    if args.note:
+        write_note(args.note)
     time.sleep(5)
     signal.signal(signal.SIGTERM, stop_monitoring)
     while True:
@@ -150,6 +163,10 @@ if args.command == 'start':
         if args.screenshots:
             take_screenshot()
         time.sleep(args.interval)
+
+elif args.command == 'note':
+    write_note(args.timerange) # Because only one optional positional arg works
+    print "Note saved at %s." % (get_current_timestamp())
 
 elif args.command == 'stop':
     pid = get_lock(args.lockfile)
@@ -162,15 +179,18 @@ elif args.command == 'stop':
 elif args.command == 'list':
     total_log = map(lambda l: l.strip(), open(args.file, 'r').readlines())
     spans = []
+    closed = True
     for line in total_log:
-        if len(spans)==0 and not line.startswith("-- Starting"):
+        if closed and not line.startswith("-- Starting"):
             continue
         elif line.startswith("-- Starting"):
             timestamp = dateparser.parse(line[len("-- Starting log at "):-3])
             spans.append([(timestamp, line)])
+            closed = False
         elif line.startswith("-- Closing"):
             timestamp = dateparser.parse(line[len("-- Closing log at "):-3])
             spans[-1].append((timestamp, line))
+            closed = True
         else:
             timestamp = dateparser.parse(':'.join(line.split(':')[:3]))
             spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
