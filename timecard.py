@@ -98,6 +98,7 @@ def parse_timerange(timerange):
 			except ValueError:
 				raise ValueError, "unknown date format"
 	timestamp_range.sort()
+	print timestamp_range
 	return timestamp_range
 		
 
@@ -129,7 +130,7 @@ def close_log():
     f.close()
 
 def stop_monitoring(signum, frame):
-    if signum in (signal.SIGTERM, signal.SIGINT) and args.verbose >= 2):
+    if signum in (signal.SIGTERM, signal.SIGINT) and args.verbose >= 2:
         logger.debug("Got %s." % ("SIGTERM" if signum==signal.SIGTERM else "SIGINT"))
     if signum in (signal.SIGTERM, signal.SIGINT):
         if args.note:
@@ -245,8 +246,6 @@ elif args.command == 'stop':
     print "Clocked out at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
 
 elif args.command == 'list':
-    if args.timerange:
-        start_time, end_time = parse_timerange(args.timerange)
     total_log = map(lambda l: l.strip(), open(args.file, 'r').readlines())
     spans = []
     closed = True
@@ -265,7 +264,8 @@ elif args.command == 'list':
             timestamp = dateparser.parse(':'.join(line.split(':')[:3]))
             spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
     if args.timerange:
-        spans = filter(lambda s: s[0]>start_time, spans)
+        start_time, end_time = parse_timerange(args.timerange)
+        spans = filter(lambda s: s[0][0]>start_time, spans)
     total_hours = 0.0
     for span in spans:
         start_time = span[0][0]
