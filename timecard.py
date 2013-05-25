@@ -129,7 +129,7 @@ def close_log():
     f.close()
 
 def stop_monitoring(signum, frame):
-    if signum in (signal.SIGTERM, signal.SIGINT) and args.verbose >= 2):
+    if signum in (signal.SIGTERM, signal.SIGINT) and args.verbose >= 2:
         logger.debug("Got %s." % ("SIGTERM" if signum==signal.SIGTERM else "SIGINT"))
     if signum in (signal.SIGTERM, signal.SIGINT):
         if args.note:
@@ -265,7 +265,7 @@ elif args.command == 'list':
             timestamp = dateparser.parse(':'.join(line.split(':')[:3]))
             spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
     if args.timerange:
-        spans = filter(lambda s: s[0]>start_time, spans)
+        spans = filter(lambda s: s[0][0]>start_time, spans)
     total_hours = 0.0
     for span in spans:
         start_time = span[0][0]
