@@ -98,6 +98,7 @@ def parse_timerange(timerange):
 			except ValueError:
 				raise ValueError, "unknown date format"
 	timestamp_range.sort()
+	#print timestamp_range
 	return timestamp_range
 		
 
@@ -245,8 +246,6 @@ elif args.command == 'stop':
     print "Clocked out at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
 
 elif args.command == 'list':
-    if args.timerange:
-        start_time, end_time = parse_timerange(args.timerange)
     total_log = map(lambda l: l.strip(), open(args.file, 'r').readlines())
     spans = []
     closed = True
@@ -265,16 +264,20 @@ elif args.command == 'list':
             timestamp = dateparser.parse(':'.join(line.split(':')[:3]))
             spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
     if args.timerange:
+        start_time, end_time = parse_timerange(args.timerange)
         spans = filter(lambda s: s[0][0]>start_time, spans)
     total_hours = 0.0
     for span in spans:
-        start_time = span[0][0]
-        end_time = span[-1][0]
-        delta = end_time - start_time
+        st_time = span[0][0]
+        e_time = span[-1][0]
+        delta = e_time - st_time
         hours = delta.total_seconds()/3600
         total_hours += hours
-        print "Worked from %s to %s\n  -- Total %.3f hours." % (format_timestamp(start_time), format_timestamp(end_time), hours)
-    print "\nTotal hours worked in this timespan: %.3f" % (total_hours)
+        print "Worked from %s to %s\n  -- Total %.3f hours." % (format_timestamp(st_time), format_timestamp(e_time), hours)
+    if args.timerange:
+        print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(start_time, True), format_timestamp(end_time, True), total_hours)
+    else:
+        print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(spans[0][0][0], True), format_timestamp(spans[-1][-1][0], True), total_hours)
             
 
 elif args.command == 'test':
