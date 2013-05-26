@@ -69,37 +69,41 @@ def get_current_timestamp(compact=False):
     return format_timestamp(datetime.datetime.now(), compact=compact)
 
 def parse_timerange(timerange):
-	timerange = timerange.split('-')
-	if len(timerange) == 1:
-		timerange.append('now')
-	timestamp_range = []
-	for item in timerange:
-		if item == 'now':
-			timestamp_range.append(datetime.datetime.now())
-		elif re.match(r'(\d+[wdh])+', item):
-			quanta = filter(len, re.split(r'(\d+[wdh])', item))
-			quanta = {q[-1]: int(q[:-1]) for q in quanta}
-			for k in ('w', 'd', 'h'):
-				if k not in quanta:
-					quanta[k] = 0
-			quanta['d'] = quanta['w']*7 + quanta['d']
-			quanta['s'] = quanta['h']*24*60*60
-			delta = datetime.timedelta(days=quanta['d'], seconds=quanta['s'])
-			timestamp_range.append(datetime.datetime.now() - delta)
-		else:
-			try:
-				timestamp_range.append(datetime.datetime.fromtimestamp(int(item)))
-				continue
-			except ValueError:
-				pass
-			try:
-				timestamp_range.append(dateparser.parse(item))
-			except ValueError:
-				raise ValueError, "unknown date format"
-	timestamp_range.sort()
-	#print timestamp_range
-	return timestamp_range
-		
+    timerange = timerange.split('-')
+    if len(timerange) == 1:
+        timerange.append('now')
+    logger.debug(timerange)
+    timestamp_range = []
+    for item in timerange:
+        if item == 'now':
+            timestamp_range.append(datetime.datetime.now())
+        elif re.match(r'(\d+[wdh])+', item):
+            quanta = filter(len, re.split(r'(\d+[wdh])', item))
+            quanta = {q[-1]: int(q[:-1]) for q in quanta}
+            for k in ('w', 'd', 'h'):
+                if k not in quanta:
+                    quanta[k] = 0
+            logger.debug(quanta)
+            quanta['d'] = quanta['w']*7 + quanta['d']
+            quanta['s'] = quanta['h']*60*60
+            logger.debug(quanta)
+            delta = datetime.timedelta(days=quanta['d'], seconds=quanta['s'])
+            timestamp_range.append(datetime.datetime.now() - delta)
+        else:
+            try:
+                timestamp_range.append(datetime.datetime.fromtimestamp(int(item)))
+                continue
+            except ValueError:
+                pass
+            try:
+                timestamp_range.append(dateparser.parse(item))
+            except ValueError:
+                raise ValueError, "unknown date format"
+    timestamp_range.sort()
+    logger.debug(timestamp_range)
+    #print timestamp_range
+    return timestamp_range
+        
 
 def start_log():
     global args
@@ -146,6 +150,10 @@ def command_start(args):
     if get_lock(args.lockfile):
         logger.error("Timecard is already locked.")
         sys.exit(1)
+    
+    if args.screenshots:
+        import screenshot
+        screenshot.logger = logger
     
     if args.verbose >= 2:
         # Debug mode: -vv
@@ -194,13 +202,13 @@ def command_stop(args):
         logger.error("Could not get a valid PID from lock file.")
         sys.exit(1)
     if args.note:
-    	write_note(args.note)
+        write_note(args.note)
     logger.debug("Killing process %d.", pid)
     os.kill(pid, signal.SIGTERM)
     print "Clocked out at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
 
 def command_note(args):
-    write_note(args.timerange) # Because only one optional positional arg works
+    write_note(args.note)
     print "Note saved at %s." % (get_current_timestamp())
 
 def command_summarize(args):
@@ -223,13 +231,30 @@ def command_summarize(args):
             spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
     if args.timerange:
         start_time, end_time = parse_timerange(args.timerange)
+        logger.debug("start_time: '%s', end_time: '%s'", start_time, end_time)
         spans = filter(lambda s: s[0][0]>start_time, spans)
     total_hours = 0.0
     for span in spans:
         st_time = span[0][0]
         e_time = span[-1][0]
-        delta = e_time - st_time
-        hours = delta.total_seconds()/3600
+        if args.timerange:
+            if e_time < start_time or st_time > end_time:
+                logger.debug("Skipping: %s, %s, %s, %s", start_time, st_time, end_time, e_time)
+                continue
+            elif start_time > st_time and end_time < e_time:
+                # Span is completely within timerange
+                delta = end_time - start_time
+            elif st_time < start_time:
+                logger.debug("%s, %s, %s, %s", start_time, st_time, end_time, e_time)
+                delta = e_time - start_time
+            elif e_time > end_time:
+                logger.debug("%s, %s, %s, %s", start_time, st_time, end_time, e_time)
+                delta = end_time - st_time
+            else:
+                delta = e_time - st_time
+        else:
+            delta = e_time - st_time
+        hours = delta.total_seconds()/3600.
         total_hours += hours
         print "Worked from %s to %s\n  -- Total %.3f hours." % (format_timestamp(st_time), format_timestamp(e_time), hours)
     if args.timerange:
@@ -238,31 +263,51 @@ def command_summarize(args):
         print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(spans[0][0][0], True), format_timestamp(spans[-1][-1][0], True), total_hours)
 
 def command_analyze(args):
-    raise NotImplementedError
+    raise NotImplementedError('Detailed analysis is not implemented yet.')
 
 def command_test(args):
     print args
     import screenshot
+    screenshot.logger = logger
     take_screenshot("tests/test.png", target=screenshot.ENTIRE_DESKTOP)
 
 
 if __name__ == "__main__":
     # If called from cron, find first display.
     if not 'DISPLAY' in os.environ:
-	    os.environ['DISPLAY'] = find_display()
-
-    commands = [f[8:] for f in filter(lambda g: g.startswith("command_"), globals())]
+        os.environ['DISPLAY'] = find_display()
 
     argparser = argparse.ArgumentParser(description="Record or analyze time usage.")
     argparser.add_argument('-v', '--verbose', action='count', default=0, help="Display debug messages. -vv will disable forking.")
     argparser.add_argument('-f', '--file', metavar='file', default='timecard.log', help='Time log file.')
     argparser.add_argument('-l', '--lockfile', metavar='lockfile', default='timecard.lock', help='Lock file name.')
-    argparser.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None, const='screenshots', help='Take screenshots with every log entry. Optional: directory to store screenshots (default is screenshots/).')
-    argparser.add_argument('-i', '--interval', metavar='interval', type=int, default=300, help='Seconds between monitor reports.')
-    argparser.add_argument('command', choices=commands)
-    argparser.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
-    argparser.add_argument('timerange', nargs='?', help='Time range for list command.')
-    argparser.add_argument('note_arg', nargs='?', help='Note to be recorded with note command.')
+    subparsers = argparser.add_subparsers(help="Help for commands.")
+    
+    parser_start = subparsers.add_parser('start', help='Clock in - begin recording into the timecard.')
+    parser_start.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None, const='screenshots', help='Take screenshots with every log entry. Optional: directory to store screenshots. Default: ./screenshots/')
+    parser_start.add_argument('-i', '--interval', metavar='interval', type=int, default=300, help='Seconds between monitor reports. Default: 5 minutes.')
+    parser_start.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
+    parser_start.set_defaults(func=command_start)
+    
+    parser_stop = subparsers.add_parser('stop', help='Clock out - stop recording and close the timecard.')
+    parser_stop.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
+    parser_stop.set_defaults(func=command_stop)
+    
+    parser_note = subparsers.add_parser('note', help='Add a note to an active timecard.')
+    parser_note.add_argument('note', nargs='?', help='Note to be recorded.')
+    parser_note.set_defaults(func=command_note)
+    
+    parser_summarize = subparsers.add_parser('summarize', help='Summarize the time usage in a timecard, optionally over a time range.')
+    parser_summarize.add_argument('timerange', nargs='?', help='Time range to summarize. Accepts absolute dates, relative dates in *w*d*h (weeks/days/hours) format, and ranges of either or both.')
+    parser_summarize.set_defaults(func=command_summarize)
+    
+    parser_analyze = subparsers.add_parser('analyze', help='More detailed analysis of time use. Not implemented yet.')
+    parser_analyze.add_argument('timerange', nargs='?', help='Time range to analyze. Accepts absolute dates, relative dates in 1w2d3h (weeks/days/hours) format, and ranges of either or both.')
+    parser_analyze.set_defaults(func=command_analyze)
+    
+    parser_test = subparsers.add_parser('test', help='Internal test.')
+    parser_test.set_defaults(func=command_test)
+    
     args = argparser.parse_args()
 
     debuglevel = {
@@ -281,21 +326,5 @@ if __name__ == "__main__":
 
     logger.debug(args)
     
-    if args.screenshots:
-        import screenshot
-        screenshot.logger = logger
-    
-    # Call the module's global function by name from the command given.
-    # Prepend the 'command_' prefix to protect against Bad Things.
-    # If command/function doesn't exist, fail out.
-    function = globals().get('command_'+args.command)
-    if not function:
-        logger.error("'%s' is not a recognized command." % args.command)
-        sys.exit(1)
-    
-    try:
-        function(args)
-    except TypeError as e:
-        raise e
-        raise NotImplementedError
+    args.func(args)
     
