@@ -1,0 +1,5 @@
+*.pyc
+*.log
+*.lock
+tests/
+screenshots/
