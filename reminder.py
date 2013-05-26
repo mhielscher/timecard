@@ -32,7 +32,7 @@ def write_note(filename, note):
     f.close()
 
 
-keywords = ['THERMS', 'cPanel', 'Parallels', '.php', 'phpmyadmin', 'WebHost', 'PHP:']
+keywords = ['THERMS', 'cPanel', 'Parallels', '.php', 'phpmyadmin', 'WebHost', 'PHP:', 'Write: ', 'deploy', 'webserver', 'name server', 'DNS']
 base_dir = '/home/restorer/Documents/devel/timecard'
 
 if __name__ == '__main__':
@@ -54,8 +54,6 @@ if __name__ == '__main__':
             logname = filename.split('.')[0]
     
     if working and (not logname or not os.path.isfile(logname+".lock")):
-        
-        
         if not pynotify.init("Timecard"):
 	        sys.exit(1)
 

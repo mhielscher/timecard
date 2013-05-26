@@ -133,8 +133,6 @@ def stop_monitoring(signum, frame):
     if signum in (signal.SIGTERM, signal.SIGINT) and args.verbose >= 2:
         logger.debug("Got %s." % ("SIGTERM" if signum==signal.SIGTERM else "SIGINT"))
     if signum in (signal.SIGTERM, signal.SIGINT):
-        if args.note:
-            write_note(args.note)
         close_log()
         if release_lock(args.lockfile):
             sys.exit(0)
@@ -241,6 +239,8 @@ elif args.command == 'stop':
     if not pid:
         logger.error("Could not get a valid PID from lock file.")
         sys.exit(1)
+    if args.note:
+    	write_note(args.note)
     logger.debug("Killing process %d.", pid)
     os.kill(pid, signal.SIGTERM)
     print "Clocked out at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
