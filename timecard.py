@@ -15,7 +15,6 @@ import argparse
 import datetime
 import re
 from dateutil import parser as dateparser
-import gtk.gdk
 
 def find_display(max_n=9):
     import Xlib.display, Xlib.error
@@ -140,148 +139,142 @@ def stop_monitoring(signum, frame):
             print >>sys.stderr, "Failed to release lock."
             sys.exit(1)
 
-def take_screenshot():
-    logger.debug("Taking screenshot.")
-    w = gtk.gdk.get_default_root_window()
-    sz = w.get_size()
-    pb = gtk.gdk.Pixbuf(gtk.gdk.COLORSPACE_RGB,False,8,sz[0],sz[1])
-    pb = pb.get_from_drawable(w,w.get_colormap(),0,0,0,0,sz[0],sz[1])
-    #pb = pb.subpixbuf(0, 0, 1920, 1200)
-    #pb = pb.scale_simple(int(1920/1.25), int(1200/1.25))
-    pb = pb.scale_simple(int(sz[0]/1.25), int(sz[1]/1.25))
-    if (pb != None):
-        pb.save(os.path.join(args.screenshots, "%s.png" % (get_current_timestamp(compact=True))), "png", {'compression': '9'})
-        return True
-    else:
-        return False
 
-logger = logging.getLogger(__name__)
 
-# If called from cron, find first display.
-if not 'DISPLAY' in os.environ:
-	os.environ['DISPLAY'] = find_display()
 
-commands = ["start", "stop", "note", "list", "analyze", "test"]
 
-argparser = argparse.ArgumentParser(description="Record or analyze time usage.")
-argparser.add_argument('-v', '--verbose', action='count', default=0, help="Display debug messages. -vv will disable forking.")
-argparser.add_argument('-f', '--file', metavar='file', default='timecard.log', help='Time log file.')
-argparser.add_argument('-l', '--lockfile', metavar='lockfile', default='timecard.lock', help='Lock file name.')
-argparser.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None, const='screenshots', help='Take screenshots with every log entry. Optional: directory to store screenshots (default is screenshots/).')
-argparser.add_argument('-i', '--interval', metavar='interval', type=int, default=300, help='Seconds between monitor reports.')
-argparser.add_argument('command', choices=commands)
-argparser.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
-argparser.add_argument('timerange', nargs='?', help='Time range for list command.')
-argparser.add_argument('note_arg', nargs='?', help='Note to be recorded with note command.')
-args = argparser.parse_args()
+if __name__ == "__main__":
+    # If called from cron, find first display.
+    if not 'DISPLAY' in os.environ:
+	    os.environ['DISPLAY'] = find_display()
 
-debuglevel = {
-    0: logging.ERROR,
-    1: logging.INFO,
-    2: logging.DEBUG
-}
+    commands = ["start", "stop", "note", "list", "analyze", "test"]
 
-logger.setLevel(debuglevel[args.verbose])
-ch = logging.StreamHandler()
-ch.setLevel(debuglevel[args.verbose])
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-ch.setFormatter(formatter)
-logger.addHandler(ch)
+    argparser = argparse.ArgumentParser(description="Record or analyze time usage.")
+    argparser.add_argument('-v', '--verbose', action='count', default=0, help="Display debug messages. -vv will disable forking.")
+    argparser.add_argument('-f', '--file', metavar='file', default='timecard.log', help='Time log file.')
+    argparser.add_argument('-l', '--lockfile', metavar='lockfile', default='timecard.lock', help='Lock file name.')
+    argparser.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None, const='screenshots', help='Take screenshots with every log entry. Optional: directory to store screenshots (default is screenshots/).')
+    argparser.add_argument('-i', '--interval', metavar='interval', type=int, default=300, help='Seconds between monitor reports.')
+    argparser.add_argument('command', choices=commands)
+    argparser.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
+    argparser.add_argument('timerange', nargs='?', help='Time range for list command.')
+    argparser.add_argument('note_arg', nargs='?', help='Note to be recorded with note command.')
+    args = argparser.parse_args()
 
-logger.debug(args)
+    debuglevel = {
+        0: logging.ERROR,
+        1: logging.INFO,
+        2: logging.DEBUG
+    }
 
-if args.command == 'start':
+    logger = logging.getLogger(__name__)
+    logger.setLevel(debuglevel[args.verbose])
+    ch = logging.StreamHandler()
+    ch.setLevel(debuglevel[args.verbose])
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    logger.debug(args)
     
-    if get_lock(args.lockfile):
-        logger.error("Timecard is already locked.")
-        sys.exit(1)
-    
-    if args.verbose >= 2:
-        if not lock_timecard(os.getpid(), args.lockfile):
-            logger.error("Unable to create lock file.")
+    if args.screenshots:
+        import screenshot
+        screenshot.logger = logger
+
+    if args.command == 'start':
+        
+        if get_lock(args.lockfile):
+            logger.error("Timecard is already locked.")
             sys.exit(1)
-        print "Clocked in at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
-    else:
-        pid = os.fork()
-        if pid > 0:
-            logger.debug("Parent reports child pid=%d", pid)
-            if not lock_timecard(pid, args.lockfile):
-                os.kill(pid, signal.SIGTERM)
+        
+        if args.verbose >= 2:
+            if not lock_timecard(os.getpid(), args.lockfile):
                 logger.error("Unable to create lock file.")
                 sys.exit(1)
             print "Clocked in at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
-            sys.exit(0)
-    
-    # Child process - this will do the monitoring
-    # Give the parent a chance to do last checks and kill us if needed.
-    logger.debug("Child started.")
-    time.sleep(2)
-    start_log()
-    if args.note:
-        write_note(args.note)
-    time.sleep(5)
-    signal.signal(signal.SIGTERM, stop_monitoring)
-    if args.verbose >= 2:
-        signal.signal(signal.SIGINT, stop_monitoring)
-    while True:
-        monitor()
-        if args.screenshots:
-            take_screenshot()
-        logger.debug("Sleeping %d seconds.", args.interval)
-        time.sleep(args.interval)
-
-elif args.command == 'note':
-    write_note(args.timerange) # Because only one optional positional arg works
-    print "Note saved at %s." % (get_current_timestamp())
-
-elif args.command == 'stop':
-    pid = get_lock(args.lockfile)
-    if not pid:
-        logger.error("Could not get a valid PID from lock file.")
-        sys.exit(1)
-    if args.note:
-    	write_note(args.note)
-    logger.debug("Killing process %d.", pid)
-    os.kill(pid, signal.SIGTERM)
-    print "Clocked out at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
-
-elif args.command == 'list':
-    total_log = map(lambda l: l.strip(), open(args.file, 'r').readlines())
-    spans = []
-    closed = True
-    for line in total_log:
-        if closed and not line.startswith("-- Starting"):
-            continue
-        elif line.startswith("-- Starting"):
-            timestamp = dateparser.parse(line[len("-- Starting log at "):-3])
-            spans.append([(timestamp, line)])
-            closed = False
-        elif line.startswith("-- Closing"):
-            timestamp = dateparser.parse(line[len("-- Closing log at "):-3])
-            spans[-1].append((timestamp, line))
-            closed = True
         else:
-            timestamp = dateparser.parse(':'.join(line.split(':')[:3]))
-            spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
-    if args.timerange:
-        start_time, end_time = parse_timerange(args.timerange)
-        spans = filter(lambda s: s[0][0]>start_time, spans)
-    total_hours = 0.0
-    for span in spans:
-        st_time = span[0][0]
-        e_time = span[-1][0]
-        delta = e_time - st_time
-        hours = delta.total_seconds()/3600
-        total_hours += hours
-        print "Worked from %s to %s\n  -- Total %.3f hours." % (format_timestamp(st_time), format_timestamp(e_time), hours)
-    if args.timerange:
-        print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(start_time, True), format_timestamp(end_time, True), total_hours)
-    else:
-        print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(spans[0][0][0], True), format_timestamp(spans[-1][-1][0], True), total_hours)
-            
+            pid = os.fork()
+            if pid > 0:
+                logger.debug("Parent reports child pid=%d", pid)
+                if not lock_timecard(pid, args.lockfile):
+                    os.kill(pid, signal.SIGTERM)
+                    logger.error("Unable to create lock file.")
+                    sys.exit(1)
+                print "Clocked in at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
+                sys.exit(0)
+        
+        # Child process - this will do the monitoring
+        # Give the parent a chance to do last checks and kill us if needed.
+        logger.debug("Child started.")
+        time.sleep(2)
+        start_log()
+        if args.note:
+            write_note(args.note)
+        time.sleep(5)
+        signal.signal(signal.SIGTERM, stop_monitoring)
+        if args.verbose >= 2:
+            signal.signal(signal.SIGINT, stop_monitoring)
+        while True:
+            monitor()
+            if args.screenshots:
+                screenshot.take_screenshot(os.path.join(args.screenshots, get_current_timestamp(True)))
+            logger.debug("Sleeping %d seconds.", args.interval)
+            time.sleep(args.interval)
 
-elif args.command == 'test':
-    print args
-    take_screenshot()
+    elif args.command == 'note':
+        write_note(args.timerange) # Because only one optional positional arg works
+        print "Note saved at %s." % (get_current_timestamp())
+
+    elif args.command == 'stop':
+        pid = get_lock(args.lockfile)
+        if not pid:
+            logger.error("Could not get a valid PID from lock file.")
+            sys.exit(1)
+        if args.note:
+        	write_note(args.note)
+        logger.debug("Killing process %d.", pid)
+        os.kill(pid, signal.SIGTERM)
+        print "Clocked out at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
+
+    elif args.command == 'list':
+        total_log = map(lambda l: l.strip(), open(args.file, 'r').readlines())
+        spans = []
+        closed = True
+        for line in total_log:
+            if closed and not line.startswith("-- Starting"):
+                continue
+            elif line.startswith("-- Starting"):
+                timestamp = dateparser.parse(line[len("-- Starting log at "):-3])
+                spans.append([(timestamp, line)])
+                closed = False
+            elif line.startswith("-- Closing"):
+                timestamp = dateparser.parse(line[len("-- Closing log at "):-3])
+                spans[-1].append((timestamp, line))
+                closed = True
+            else:
+                timestamp = dateparser.parse(':'.join(line.split(':')[:3]))
+                spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
+        if args.timerange:
+            start_time, end_time = parse_timerange(args.timerange)
+            spans = filter(lambda s: s[0][0]>start_time, spans)
+        total_hours = 0.0
+        for span in spans:
+            st_time = span[0][0]
+            e_time = span[-1][0]
+            delta = e_time - st_time
+            hours = delta.total_seconds()/3600
+            total_hours += hours
+            print "Worked from %s to %s\n  -- Total %.3f hours." % (format_timestamp(st_time), format_timestamp(e_time), hours)
+        if args.timerange:
+            print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(start_time, True), format_timestamp(end_time, True), total_hours)
+        else:
+            print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(spans[0][0][0], True), format_timestamp(spans[-1][-1][0], True), total_hours)
+                
+
+    elif args.command == 'test':
+        print args
+        import screenshot
+        take_screenshot("tests/test.png", target=screenshot.ENTIRE_DESKTOP)
 
 
