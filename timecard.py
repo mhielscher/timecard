@@ -15,6 +15,7 @@ import argparse
 import datetime
 import re
 from dateutil import parser as dateparser
+import screenshot
 
 def find_display(max_n=9):
     import Xlib.display, Xlib.error
@@ -151,10 +152,6 @@ def command_start(args):
         logger.error("Timecard is already locked.")
         sys.exit(1)
     
-    if args.screenshots:
-        import screenshot
-        screenshot.logger = logger
-    
     if args.verbose >= 2:
         # Debug mode: -vv
         if not lock_timecard(os.getpid(), args.lockfile):
@@ -192,7 +189,7 @@ def run_child(args):
     while True:
         monitor()
         if args.screenshots:
-            screenshot.take_screenshot(os.path.join(args.screenshots, get_current_timestamp(True)))
+            screenshot.take_screenshot(os.path.join(args.screenshots, get_current_timestamp(True)), target=args.screenshot_type)
         logger.debug("Sleeping %d seconds.", args.interval)
         time.sleep(args.interval)
 
@@ -267,9 +264,7 @@ def command_analyze(args):
 
 def command_test(args):
     print args
-    import screenshot
-    screenshot.logger = logger
-    take_screenshot("tests/test.png", target=screenshot.ENTIRE_DESKTOP)
+    screenshot.take_screenshot("tests/test.png", target=screenshot.ENTIRE_DESKTOP)
 
 
 if __name__ == "__main__":
@@ -283,8 +278,16 @@ if __name__ == "__main__":
     argparser.add_argument('-l', '--lockfile', metavar='lockfile', default='timecard.lock', help='Lock file name.')
     subparsers = argparser.add_subparsers(help="Help for commands.")
     
+    screenshot_types = {
+        'all': screenshot.ENTIRE_DESKTOP,
+        'active-window': screenshot.ACTIVE_WINDOW,
+        'active-monitor': screenshot.ACTIVE_MONITOR,
+        'cursor-monitor': screenshot.CURSOR_MONITOR
+    }
+    
     parser_start = subparsers.add_parser('start', help='Clock in - begin recording into the timecard.')
     parser_start.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None, const='screenshots', help='Take screenshots with every log entry. Optional: directory to store screenshots. Default: ./screenshots/')
+    parser_start.add_argument('--screenshot-type', choices=screenshot_types.keys(), default='active-monitor', help='Area to restrict screenshots to. Default: active-monitor')
     parser_start.add_argument('-i', '--interval', metavar='interval', type=int, default=300, help='Seconds between monitor reports. Default: 5 minutes.')
     parser_start.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
     parser_start.set_defaults(func=command_start)
@@ -309,6 +312,9 @@ if __name__ == "__main__":
     parser_test.set_defaults(func=command_test)
     
     args = argparser.parse_args()
+    
+    if 'screenshots' in args:
+        args.screenshot_type = screenshot_types[args.screenshot_type]
 
     debuglevel = {
         0: logging.ERROR,
@@ -323,6 +329,8 @@ if __name__ == "__main__":
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     logger.addHandler(ch)
+    if 'screenshots' in args:
+        screenshot.logger = logger
 
     logger.debug(args)
     
