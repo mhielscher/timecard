@@ -49,11 +49,11 @@ if __name__ == '__main__':
     os.chdir(base_dir)
     
     logname = None
-    for filename in os.listdir('.'):
+    for filename in os.listdir('/tmp'):
         if filename.endswith('.lock'):
-            logname = filename.split('.')[0]
+            logname = filename
     
-    if working and (not logname or not os.path.isfile(logname+".lock")):
+    if working and not logname:
         if not pynotify.init("Timecard"):
 	        sys.exit(1)
 

@@ -108,27 +108,27 @@ def parse_timerange(timerange):
 
 def start_log():
     global args
-    f = open(args.file, 'a')
+    f = open(args.filepath, 'a')
     print >>f, "-- Starting log at %s --" % (get_current_timestamp())
     logger.debug("-- Starting log at %s --", get_current_timestamp())
     f.close()
     
 def write_note(note):
     global args
-    f = open(args.file, 'a')
+    f = open(args.filepath, 'a')
     print >>f, "%s: [Note] %s" % (get_current_timestamp(), note)
     f.close()
 
 def monitor():
     global args
-    f = open(args.file, 'a')
+    f = open(args.filepath, 'a')
     print >>f, "%s: %s" % (get_current_timestamp(), get_active_window())
     logger.debug("%s: %s", get_current_timestamp(), get_active_window())
     f.close()
 
 def close_log():
     global args
-    f = open(args.file, 'a')
+    f = open(args.filepath, 'a')
     print >>f, "-- Closing log at %s --" % (get_current_timestamp())
     logger.debug("-- Closing log at %s --", get_current_timestamp())
     f.close()
@@ -209,7 +209,7 @@ def command_note(args):
     print "Note saved at %s." % (get_current_timestamp())
 
 def command_summarize(args):
-    total_log = map(lambda l: l.strip(), open(args.file, 'r').readlines())
+    total_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
     spans = []
     closed = True
     for line in total_log:
@@ -274,8 +274,7 @@ if __name__ == "__main__":
 
     argparser = argparse.ArgumentParser(description="Record or analyze time usage.")
     argparser.add_argument('-v', '--verbose', action='count', default=0, help="Display debug messages. -vv will disable forking.")
-    argparser.add_argument('-f', '--file', metavar='file', default='timecard.log', help='Time log file.')
-    argparser.add_argument('-l', '--lockfile', metavar='lockfile', default='timecard.lock', help='Lock file name.')
+    argparser.add_argument('-f', '--file', metavar='filepath', dest='filepath', default='timecard.log', help='Time log file.')
     subparsers = argparser.add_subparsers(help="Help for commands.")
     
     screenshot_types = {
@@ -331,6 +330,9 @@ if __name__ == "__main__":
     logger.addHandler(ch)
     if 'screenshots' in args:
         screenshot.logger = logger
+    
+    args.cardname = os.path.splitext(os.path.split(args.filepath)[1])[0]
+    args.lockfile = os.path.join('/tmp', args.cardname+'.lock')
 
     logger.debug(args)
     
