@@ -78,6 +78,8 @@ def parse_timerange(timerange):
     for item in timerange:
         if item == 'now':
             timestamp_range.append(datetime.datetime.now())
+        elif item == 'today':
+            timestamp_range.append(datetime.datetime.combine(datetime.date.today(), datetime.time.min))
         elif re.match(r'(\d+[wdh])+', item):
             quanta = filter(len, re.split(r'(\d+[wdh])', item))
             quanta = {q[-1]: int(q[:-1]) for q in quanta}
