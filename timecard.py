@@ -69,17 +69,19 @@ def format_timestamp(dt, compact=False):
 def get_current_timestamp(compact=False):
     return format_timestamp(datetime.datetime.now(), compact=compact)
 
-def parse_timerange(timerange):
+def parse_timerange(timerange, last_paid=None):
     timerange = timerange.split('-')
     if len(timerange) == 1:
         timerange.append('now')
     logger.debug(timerange)
     timestamp_range = []
     for item in timerange:
-        if item == 'now':
+        if item.lower() == 'now':
             timestamp_range.append(datetime.datetime.now())
-        elif item == 'today':
+        elif item.lower() == 'today':
             timestamp_range.append(datetime.datetime.combine(datetime.date.today(), datetime.time.min))
+        elif item.lower() in ('lastpaid', 'last paid', 'last_paid'):
+            timestamp_range.append(last_paid)
         elif re.match(r'(\d+[wdh])+', item):
             quanta = filter(len, re.split(r'(\d+[wdh])', item))
             quanta = {q[-1]: int(q[:-1]) for q in quanta}
@@ -214,22 +216,24 @@ def command_summarize(args):
     total_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
     spans = []
     closed = True
+    last_paid = datetime.datetime(datetime.MINYEAR, 1, 1)
     for line in total_log:
+        timestamp = dateparser.parse(line[line.find(':')-2:line.find(str(datetime.datetime.now().year))+4])
+        if "[Note]" in line and "got paid" in line.lower() and timestamp > last_paid:
+            last_paid = timestamp
+        
         if closed and not line.startswith("-- Starting"):
             continue
         elif line.startswith("-- Starting"):
-            timestamp = dateparser.parse(line[len("-- Starting log at "):-3])
             spans.append([(timestamp, line)])
             closed = False
         elif line.startswith("-- Closing"):
-            timestamp = dateparser.parse(line[len("-- Closing log at "):-3])
             spans[-1].append((timestamp, line))
             closed = True
         else:
-            timestamp = dateparser.parse(':'.join(line.split(':')[:3]))
             spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
     if args.timerange:
-        start_time, end_time = parse_timerange(args.timerange)
+        start_time, end_time = parse_timerange(args.timerange, last_paid)
         logger.debug("start_time: '%s', end_time: '%s'", start_time, end_time)
         spans = filter(lambda s: s[0][0]>start_time, spans)
     total_hours = 0.0

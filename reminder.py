@@ -44,10 +44,10 @@ def check_ignore():
     return date > datetime.datetime.now() - ignore_time
 
 def set_ignore_file(notification=None, action=None, data=None):
-    print notification, action, data
+    #print notification, action, data
     f = open(ignore_filepath, 'w')
     d = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    print d
+    #print d
     f.write(d)
     f.close()
     notification.close()
