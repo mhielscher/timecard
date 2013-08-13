@@ -7,7 +7,7 @@ import pynotify
 import gtk
 
 ignore_filepath = "/tmp/timecard-reminder.ignore"
-ignore_time = datetime.timedelta(hours=2)
+ignore_time = datetime.timedelta(hours=1)
 
 def find_display(max_n=9):
     display_name = ""
@@ -39,16 +39,16 @@ def write_note(filename, note):
 def check_ignore():
     if not os.path.exists(ignore_filepath):
         return False
-    datestr = open(ignore_filepath, 'r').read()
+    datestr = open(ignore_filepath, 'r').read().strip()
     date = datetime.datetime.strptime(datestr, "%Y-%m-%d-%H:%M:%S")
-    return date > datetime.datetime.now() - ignore_time
+    return date > (datetime.datetime.now() - ignore_time)
 
 def set_ignore_file(notification=None, action=None, data=None):
     #print notification, action, data
     f = open(ignore_filepath, 'w')
     d = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
     #print d
-    f.write(d)
+    print >>f, d
     f.close()
     notification.close()
     gtk.main_quit()
