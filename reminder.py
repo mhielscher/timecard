@@ -92,6 +92,6 @@ if __name__ == '__main__':
         n.add_action("ignore", "Ignore", set_ignore_file, None)
         n.show()
         
-        subprocess.call('beep -f 1350 -r 3 -d 25'.split())
+        subprocess.call('beep -f 1350 -r 2 -d 35 -l 90'.split())
         
         gtk.main()
