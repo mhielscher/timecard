@@ -5,6 +5,7 @@ import Xlib.display, Xlib.error
 import subprocess
 import pynotify
 import gtk
+import glib
 
 ignore_filepath = "/tmp/timecard-reminder.ignore"
 ignore_time = datetime.timedelta(hours=1)
@@ -91,6 +92,8 @@ if __name__ == '__main__':
         n.add_action("okay", "Okay", noop, None)
         n.add_action("ignore", "Ignore", set_ignore_file, None)
         n.show()
+        
+        glib.timeout_add_seconds(10, gtk.main_quit)
         
         subprocess.call('beep -f 1350 -r 2 -d 35 -l 90'.split())
         
