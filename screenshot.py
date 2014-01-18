@@ -16,6 +16,8 @@ def get_active_window(root=None):
     # Make sure active window hinting is working
     if root.supports_net_wm_hint("_NET_ACTIVE_WINDOW") and root.supports_net_wm_hint("_NET_WM_WINDOW_TYPE"):
         active = root.get_active_window()
+        if not active:
+            return None
         # If active window is a desktop, fail
         if active.property_get("_NET_WM_WINDOW_TYPE")[-1][0] == '_NET_WM_WINDOW_TYPE_DESKTOP':
             return None
