@@ -16,6 +16,7 @@ import datetime
 import re
 from dateutil import parser as dateparser
 import screenshot
+import pynotify
 
 def find_display(max_n=9):
     import Xlib.display, Xlib.error
@@ -184,18 +185,31 @@ def run_child(args):
     logger.debug("Child started.")
     time.sleep(2)
     start_log()
+    
+    if args.notify != None and pynotify.init("Timecard"):
+        delay = args.notify
+        args.interval -= delay
+    else:
+        delay = 0
     if args.note:
         write_note(args.note)
+    
     time.sleep(5)
     signal.signal(signal.SIGTERM, stop_monitoring)
     if args.verbose >= 2:
         signal.signal(signal.SIGINT, stop_monitoring)
     while True:
+        if args.notify != None:
+            n = pynotify.Notification("Timecard", "Screenshot in 5 seconds.")
+            n.set_timeout(pynotify.EXPIRES_DEFAULT)
+            n.show()
+            time.sleep(delay)
+            n.close()
         monitor()
         if args.screenshots:
             screenshot.take_screenshot(os.path.join(args.screenshots, get_current_timestamp(True)), target=args.screenshot_type)
-        logger.debug("Sleeping %d seconds.", args.interval)
-        time.sleep(args.interval)
+        logger.debug("Sleeping %d seconds.", args.interval-delay)
+        time.sleep(args.interval-delay)
 
 def command_stop(args):
     pid = get_lock(args.lockfile)
@@ -212,16 +226,16 @@ def command_note(args):
     write_note(args.note)
     print "Note saved at %s." % (get_current_timestamp())
 
-def command_summarize(args):
-    total_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
+def get_spans(lines):
     spans = []
     closed = True
     last_paid = datetime.datetime(datetime.MINYEAR, 1, 1)
-    for line in total_log:
-        timestamp = dateparser.parse(line[line.find(':')-2:line.find(str(datetime.datetime.now().year))+4])
+    for line in lines:
+        if not re.search(r'\d\d\d\d(:| --)', line):
+            continue
+        timestamp = dateparser.parse(line[line.find(':')-2:re.search(r'\d\d\d\d(:| --)', line).start()+4])
         if "[Note]" in line and "got paid" in line.lower() and timestamp > last_paid:
             last_paid = timestamp
-        
         if closed and not line.startswith("-- Starting"):
             continue
         elif line.startswith("-- Starting"):
@@ -232,6 +246,11 @@ def command_summarize(args):
             closed = True
         else:
             spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
+    return (spans, last_paid)
+
+def command_summarize(args):
+    total_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
+    spans, last_paid = get_spans(total_log)
     if args.timerange:
         start_time, end_time = parse_timerange(args.timerange, last_paid)
         logger.debug("start_time: '%s', end_time: '%s'", start_time, end_time)
@@ -266,7 +285,9 @@ def command_summarize(args):
         print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(spans[0][0][0], True), format_timestamp(spans[-1][-1][0], True), total_hours)
 
 def command_analyze(args):
-    raise NotImplementedError('Detailed analysis is not implemented yet.')
+    total_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
+    spans, last_paid = get_spans(total_log)
+    print spans
 
 def command_test(args):
     print args
@@ -295,6 +316,7 @@ if __name__ == "__main__":
     parser_start.add_argument('--screenshot-type', choices=screenshot_types.keys(), default='active-monitor', help='Area to restrict screenshots to. Default: active-monitor')
     parser_start.add_argument('-i', '--interval', metavar='interval', type=int, default=300, help='Seconds between monitor reports. Default: 5 minutes.')
     parser_start.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
+    parser_start.add_argument('-N', '--notify', metavar='warning', nargs='?', type=int, default=None, const=5, help='Notify [N] seconds before recording. (default N=5)')
     parser_start.set_defaults(func=command_start)
     
     parser_stop = subparsers.add_parser('stop', help='Clock out - stop recording and close the timecard.')
@@ -309,7 +331,7 @@ if __name__ == "__main__":
     parser_summarize.add_argument('timerange', nargs='?', help='Time range to summarize. Accepts absolute dates, relative dates in *w*d*h (weeks/days/hours) format, and ranges of either or both.')
     parser_summarize.set_defaults(func=command_summarize)
     
-    parser_analyze = subparsers.add_parser('analyze', help='More detailed analysis of time use. Not implemented yet.')
+    parser_analyze = subparsers.add_parser('analyze', help='More detailed analysis of time use.')
     parser_analyze.add_argument('timerange', nargs='?', help='Time range to analyze. Accepts absolute dates, relative dates in 1w2d3h (weeks/days/hours) format, and ranges of either or both.')
     parser_analyze.set_defaults(func=command_analyze)
     
