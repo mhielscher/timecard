@@ -17,6 +17,8 @@ import re
 from dateutil import parser as dateparser
 import screenshot
 import pynotify
+from gi.repository import Gtk, GLib, Wnck
+
 
 def find_display(max_n=9):
     import Xlib.display, Xlib.error
@@ -194,10 +196,17 @@ def run_child(args):
     if args.note:
         write_note(args.note)
     
-    time.sleep(5)
+    time.sleep(1)
     signal.signal(signal.SIGTERM, stop_monitoring)
     if args.verbose >= 2:
         signal.signal(signal.SIGINT, stop_monitoring)
+    
+    # Set up events
+    screen = Wnck.Screen.get_default()
+    screen.connect("active-window-changed", focus_changed)
+    if args.screenshots:
+        GLib.timeout_add_seconds(refresh_time, reload_main, view, sw)
+    
     while True:
         if args.notify != None:
             n = pynotify.Notification("Timecard", "Screenshot in 5 seconds.")
@@ -294,6 +303,9 @@ def command_test(args):
     screenshot.take_screenshot("tests/test.png", target=screenshot.ENTIRE_DESKTOP)
 
 
+
+### Main script ###
+
 if __name__ == "__main__":
     # If called from cron, find first display.
     if not 'DISPLAY' in os.environ:
@@ -314,9 +326,9 @@ if __name__ == "__main__":
     parser_start = subparsers.add_parser('start', help='Clock in - begin recording into the timecard.')
     parser_start.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None, const='screenshots', help='Take screenshots with every log entry. Optional: directory to store screenshots. Default: ./screenshots/')
     parser_start.add_argument('--screenshot-type', choices=screenshot_types.keys(), default='active-monitor', help='Area to restrict screenshots to. Default: active-monitor')
-    parser_start.add_argument('-i', '--interval', metavar='interval', type=int, default=300, help='Seconds between monitor reports. Default: 5 minutes.')
+    parser_start.add_argument('-i', '--interval', metavar='interval', type=int, default=300, help='Seconds between screenshots. Default: 5 minutes.')
     parser_start.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
-    parser_start.add_argument('-N', '--notify', metavar='warning', nargs='?', type=int, default=None, const=5, help='Notify [N] seconds before recording. (default N=5)')
+    parser_start.add_argument('-N', '--notify', metavar='warning', nargs='?', type=int, default=None, const=5, help='Notify [N] seconds before a screenshot. (default N=5)')
     parser_start.set_defaults(func=command_start)
     
     parser_stop = subparsers.add_parser('stop', help='Clock out - stop recording and close the timecard.')
