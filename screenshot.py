@@ -1,6 +1,6 @@
 import os
 import logging
-import gtk.gdk
+from gi.repository import Gdk, GdkPixbuf
 
 ARBITRARY_AREA = 0 # Specified area
 ACTIVE_WINDOW = 1 # Focused/top window only
@@ -12,22 +12,15 @@ logger = logging.getLogger(__name__)
 
 def get_active_window(root=None):
     """Returns the active (focused, top) window, or None."""
-    root = root or gtk.gdk.get_root_window()
-    # Make sure active window hinting is working
-    if root.supports_net_wm_hint("_NET_ACTIVE_WINDOW") and root.supports_net_wm_hint("_NET_WM_WINDOW_TYPE"):
-        active = root.get_active_window()
-        if not active:
-            return None
-        # If active window is a desktop, fail
-        if active.property_get("_NET_WM_WINDOW_TYPE")[-1][0] == '_NET_WM_WINDOW_TYPE_DESKTOP':
-            return None
-        return active
-    else:
+    root = root or Gdk.Screen.get_default()
+    active = root.get_active_window()
+    if not active:
         return None
+    return active
 
 def get_active_monitor(root=None):
     """Returns the index of the active monitor, or -1 if undetermined."""
-    root = root or gtk.gdk.get_root_window()
+    root = root or Gdk.Screen.get_default()
     num_monitors = root.get_n_monitors()
     if (num_monitors == 1):
         return 0
@@ -40,7 +33,7 @@ def get_active_monitor(root=None):
 def take_screenshot(filepath, target=ACTIVE_MONITOR, fmt="png", scale=1.0, area=(0,0,0,0), fmt_options={}):
     """Take a screenshot of the desired target area."""
     logger.debug("Taking screenshot (target=%d)." % target)
-    root = gtk.gdk.screen_get_default()
+    root = Gdk.Screen.get_default()
     root_win = root.get_root_window()
     active = get_active_window(root)
     if active == None and target in (ACTIVE_WINDOW, ACTIVE_MONITOR):
@@ -50,27 +43,24 @@ def take_screenshot(filepath, target=ACTIVE_MONITOR, fmt="png", scale=1.0, area=
     if target == ARBITRARY_AREA:
         x, y, w, h = area
     elif target == ACTIVE_WINDOW:
-        rx, ry, w, h, d = active.get_geometry()
+        rx, ry, w, h = active.get_geometry()
         w = w + rx*2
         h = h + rx+ry
         x, y = active.get_root_origin()
     elif target == ACTIVE_MONITOR:
         monitor = root.get_monitor_at_window(active)
-        x, y, w, h = root.get_monitor_geometry(monitor)
+        x, y, w, h = (root.get_monitor_geometry(monitor).x, root.get_monitor_geometry(monitor).y, root.get_monitor_geometry(monitor).width, root.get_monitor_geometry(monitor).height)
     elif target == CURSOR_MONITOR:
         cursor = root_win.get_pointer()
-        monitor = root.get_monitor_at_point(*cursor[:2])
-        x, y, w, h = root.get_monitor_geometry(monitor)
+        monitor = root.get_monitor_at_point(*cursor[1:3])
+        x, y, w, h = (root.get_monitor_geometry(monitor).x, root.get_monitor_geometry(monitor).y, root.get_monitor_geometry(monitor).width, root.get_monitor_geometry(monitor).height)
     elif target == ENTIRE_DESKTOP:
-        x, y, w, h, d = root_win.get_geometry()
+        x, y, w, h = root_win.get_geometry()
     
     logger.debug("Area = (x=%d, y=%d, w=%d, h=%d)" % (x, y, w, h))
-    pb = gtk.gdk.Pixbuf(gtk.gdk.COLORSPACE_RGB, False, 8, w, h)
-    pb = pb.get_from_drawable(root_win, root_win.get_colormap(),
-            x, y, 0, 0,
-            w, h
-        )
-    pb = pb.scale_simple(int(w*scale), int(h*scale), gtk.gdk.INTERP_BILINEAR)
+    #pb = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, w, h)
+    pb = Gdk.pixbuf_get_from_window(root_win, x, y, w, h)
+    pb = pb.scale_simple(int(w*scale), int(h*scale), GdkPixbuf.InterpType.BILINEAR)
     
     if fmt == "jpg":
         # "jpeg" required for pb.save format string
@@ -83,7 +73,7 @@ def take_screenshot(filepath, target=ACTIVE_MONITOR, fmt="png", scale=1.0, area=
     if (pb != None):
         logger.debug("Saving screenshot to %s." % filepath)
         try:
-            pb.save(filepath, fmt, fmt_options)
+            pb.savev(filepath, fmt, fmt_options.keys(), fmt_options.values())
         except Exception as e:
             logger.error("Failed to save screenshot to %s: %s." % (filepath, e))
             return False

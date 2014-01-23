@@ -16,9 +16,11 @@ import datetime
 import re
 from dateutil import parser as dateparser
 import screenshot
-import pynotify
+#import pynotify
 from gi.repository import Gtk, GLib, Wnck
+from sh import ps
 
+registered_windows = set()
 
 def find_display(max_n=9):
     import Xlib.display, Xlib.error
@@ -39,6 +41,30 @@ def get_active_window():
     window_id = subprocess.check_output(['xprop', '-root', '-f', '_NET_ACTIVE_WINDOW', '0x', r' $0\n', '_NET_ACTIVE_WINDOW']).split()[1]
     window_title = ' '.join(subprocess.check_output(['xprop', '-id', str(window_id), '-f', '_NET_WM_NAME', '0s', r' $0\n', '_NET_WM_NAME']).split()[1:]).strip('"')
     return window_title
+
+def window_name_changed(window):
+    if Wnck.Screen.get_default().get_active_window() != window:
+        return
+    process_cmd = ps('-p', window.get_pid(), '-o', 'cmd', 'h').strip()
+    monitor(process_cmd, window.get_name())
+
+def application_closed(screen, application):
+    global registered_windows
+    logger.debug("pid %d closed:" % (application.get_pid()))
+    logger.debug("  Deregistering windows: %s" % ([w.get_name() for w in application.get_windows()]))
+    registered_windows -= frozenset(application.get_windows())
+
+def focus_changed(screen, prev_window):
+    global registered_windows
+    window = screen.get_active_window()
+    if not window:
+        return
+    process_cmd = ps('-p', window.get_pid(), '-o', 'cmd', 'h').strip()
+    monitor(process_cmd, window.get_name())
+    if window not in registered_windows:
+    #and process_cmd.split()[0].split('/')[-1] == "google-chrome":
+        window.connect("name-changed", window_name_changed)
+        registered_windows.add(window)
 
 def get_lock(lockfilename):
     if not os.path.isfile(lockfilename):
@@ -113,6 +139,13 @@ def parse_timerange(timerange, last_paid=None):
     return timestamp_range
         
 
+def notify(title, message):
+    n = pynotify.Notification(title, message)
+    n.set_timeout(pynotify.EXPIRES_DEFAULT)
+    n.show()
+    time.sleep(delay)
+    n.close()
+
 def start_log():
     global args
     f = open(args.filepath, 'a')
@@ -126,11 +159,11 @@ def write_note(note):
     print >>f, "%s: [Note] %s" % (get_current_timestamp(), note)
     f.close()
 
-def monitor():
+def monitor(command, window_name):
     global args
     f = open(args.filepath, 'a')
-    print >>f, "%s: %s" % (get_current_timestamp(), get_active_window())
-    logger.debug("%s: %s", get_current_timestamp(), get_active_window())
+    print >>f, "%s -- %s ::: %s" % (get_current_timestamp(), command, window_name)
+    logger.debug("%s -- %s ::: %s" % (get_current_timestamp(), command, window_name))
     f.close()
 
 def close_log():
@@ -188,15 +221,9 @@ def run_child(args):
     time.sleep(2)
     start_log()
     
-    if args.notify != None and pynotify.init("Timecard"):
-        delay = args.notify
-        args.interval -= delay
-    else:
-        delay = 0
     if args.note:
         write_note(args.note)
     
-    time.sleep(1)
     signal.signal(signal.SIGTERM, stop_monitoring)
     if args.verbose >= 2:
         signal.signal(signal.SIGINT, stop_monitoring)
@@ -204,21 +231,12 @@ def run_child(args):
     # Set up events
     screen = Wnck.Screen.get_default()
     screen.connect("active-window-changed", focus_changed)
+    screen.connect("application-closed", application_closed)
     if args.screenshots:
-        GLib.timeout_add_seconds(refresh_time, reload_main, view, sw)
+            GLib.timeout_add_second(args.interval, screenshot.take_screenshot, os.path.join(args.screenshots, get_current_timestamp(True)), target=args.screenshot_type)
     
-    while True:
-        if args.notify != None:
-            n = pynotify.Notification("Timecard", "Screenshot in 5 seconds.")
-            n.set_timeout(pynotify.EXPIRES_DEFAULT)
-            n.show()
-            time.sleep(delay)
-            n.close()
-        monitor()
-        if args.screenshots:
-            screenshot.take_screenshot(os.path.join(args.screenshots, get_current_timestamp(True)), target=args.screenshot_type)
-        logger.debug("Sleeping %d seconds.", args.interval-delay)
-        time.sleep(args.interval-delay)
+    logger.debug("Going into main loop.")
+    Gtk.main()
 
 def command_stop(args):
     pid = get_lock(args.lockfile)
@@ -240,9 +258,9 @@ def get_spans(lines):
     closed = True
     last_paid = datetime.datetime(datetime.MINYEAR, 1, 1)
     for line in lines:
-        if not re.search(r'\d\d\d\d(:| --)', line):
+        if " -- " not in line:
             continue
-        timestamp = dateparser.parse(line[line.find(':')-2:re.search(r'\d\d\d\d(:| --)', line).start()+4])
+        timestamp = dateparser.parse(line[line.find(':')-2:line.find(" -- ")])
         if "[Note]" in line and "got paid" in line.lower() and timestamp > last_paid:
             last_paid = timestamp
         if closed and not line.startswith("-- Starting"):
@@ -294,9 +312,47 @@ def command_summarize(args):
         print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(spans[0][0][0], True), format_timestamp(spans[-1][-1][0], True), total_hours)
 
 def command_analyze(args):
-    total_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
-    spans, last_paid = get_spans(total_log)
-    print spans
+    raw_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
+    raw_log = filter(lambda l: len(l)>0, raw_log)
+    last_paid = datetime.datetime(datetime.MINYEAR, 1, 1)
+    parsed_log = []
+    for line in raw_log:
+        if line.startswith("-- Starting log"):
+            parsed_log.append([])
+            segment = parsed_log[-1]
+            continue
+        elif line.startswith("-- Closing log"):
+            segment.append((dateparser.parse(line[len("-- Closing log at "):-3]), "END", ""))
+            continue
+        
+        timestamp, info = line.split(' -- ', 1)
+        if info.startswith("[Note]"):
+            if "got paid" in line.lower() and timestamp > last_paid:
+                last_paid = timestamp
+            continue
+        command, window_name = info.split(' ::: ', 1)
+        segment.append((dateparser.parse(timestamp), command, window_name))
+    command_histogram = {}
+    window_histogram = {}
+    for segment in parsed_log:
+        for i in xrange(len(segment)-1):
+            entry = segment[i]
+            next_entry = segment[i+1]
+            if entry[1] == "END":
+                break
+            cmd_time_accumulated = command_histogram.get(entry[1], datetime.timedelta(0))
+            cmd_time_accumulated += next_entry[0] - entry[0]
+            command_histogram[entry[1]] = cmd_time_accumulated
+            win_time_accumulated = window_histogram.get(entry[2], datetime.timedelta(0))
+            win_time_accumulated += next_entry[0] - entry[0]
+            window_histogram[entry[2]] = win_time_accumulated
+    print "Time spent per command:"
+    for command, time_len in sorted(command_histogram.items(), cmp=lambda e1, e2: cmp(e1[1], e2[1]), reverse=True):
+        print "%s\t%s" % (time_len, command)
+    print ""
+    print "Time spent per window name:"
+    for win_name, time_len in sorted(window_histogram.items(), cmp=lambda e1, e2: cmp(e1[1], e2[1]), reverse=True):
+        print "%s\t%s" % (time_len, win_name)
 
 def command_test(args):
     print args
