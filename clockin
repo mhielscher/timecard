@@ -1,7 +1,7 @@
 #!/bin/sh
 
 if [ -n "$1" ]; then
-    python timecard.py -f ~/Dropbox/therms.log start -N -i 180 -s -n "$*"
+    python timecard.py -f ~/Dropbox/therms.log start -n "$*"
 else
-    python timecard.py -f ~/Dropbox/therms.log start -N -i 180 -s
+    python timecard.py -f ~/Dropbox/therms.log start
 fi

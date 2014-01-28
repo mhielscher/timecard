@@ -258,26 +258,31 @@ def get_spans(lines):
     closed = True
     last_paid = datetime.datetime(datetime.MINYEAR, 1, 1)
     for line in lines:
-        if " -- " not in line:
-            continue
-        timestamp = dateparser.parse(line[line.find(':')-2:line.find(" -- ")])
+        logger.debug(line)
+        #if " -- " not in line:
+        #    logger.debug('" -- " not found in "%s"' % (line))
+        #    continue
+        timestamp = dateparser.parse(line[line.find(':')-2:line.find(" --")])
         if "[Note]" in line and "got paid" in line.lower() and timestamp > last_paid:
             last_paid = timestamp
         if closed and not line.startswith("-- Starting"):
             continue
         elif line.startswith("-- Starting"):
+            logger.debug("Starting at %s" % (timestamp))
             spans.append([(timestamp, line)])
             closed = False
         elif line.startswith("-- Closing"):
             spans[-1].append((timestamp, line))
             closed = True
         else:
-            spans[-1].append((timestamp, ':'.join(line.split(':')[3:])))
+            spans[-1].append((timestamp, line[line.find(" -- ")+4:line.find(" ::: ")], line[line.find(" ::: "):]))
     return (spans, last_paid)
 
 def command_summarize(args):
     total_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
+    logger.debug(len(total_log))
     spans, last_paid = get_spans(total_log)
+    logger.debug(len(spans))
     if args.timerange:
         start_time, end_time = parse_timerange(args.timerange, last_paid)
         logger.debug("start_time: '%s', end_time: '%s'", start_time, end_time)
