@@ -111,15 +111,15 @@ def parse_timerange(timerange, last_paid=None):
             timestamp_range.append(datetime.datetime.combine(datetime.date.today(), datetime.time.min))
         elif item.lower() in ('lastpaid', 'last paid', 'last_paid'):
             timestamp_range.append(last_paid)
-        elif re.match(r'(\d+[wdh])+', item):
-            quanta = filter(len, re.split(r'(\d+[wdh])', item))
+        elif re.match(r'(\d+[wdhm])+', item):
+            quanta = filter(len, re.split(r'(\d+[wdhm])', item))
             quanta = {q[-1]: int(q[:-1]) for q in quanta}
-            for k in ('w', 'd', 'h'):
+            for k in ('w', 'd', 'h', 'm'):
                 if k not in quanta:
                     quanta[k] = 0
             logger.debug(quanta)
             quanta['d'] = quanta['w']*7 + quanta['d']
-            quanta['s'] = quanta['h']*60*60
+            quanta['s'] = quanta['h']*60*60 + quanta['m']*60
             logger.debug(quanta)
             delta = datetime.timedelta(days=quanta['d'], seconds=quanta['s'])
             timestamp_range.append(datetime.datetime.now() - delta)
@@ -156,7 +156,13 @@ def start_log():
 def write_note(note):
     global args
     f = open(args.filepath, 'a')
-    print >>f, "%s: [Note] %s" % (get_current_timestamp(), note)
+    print >>f, "%s -- [Note] %s" % (get_current_timestamp(), note)
+    f.close()
+
+def write_manual_adjustment(td):
+    global args
+    f = open(args.filepath, 'a')
+    print >>f, "%s -- [Manual Adjustment] %d" % (get_current_timestamp(), td.seconds)
     f.close()
 
 def monitor(command, window_name):
@@ -255,6 +261,7 @@ def command_note(args):
 
 def get_spans(lines):
     spans = []
+    adjustments = 0
     closed = True
     last_paid = datetime.datetime(datetime.MINYEAR, 1, 1)
     for line in lines:
@@ -262,9 +269,13 @@ def get_spans(lines):
         #if " -- " not in line:
         #    logger.debug('" -- " not found in "%s"' % (line))
         #    continue
-        timestamp = dateparser.parse(line[line.find(':')-2:line.find(" --")])
         if "[Note]" in line and "got paid" in line.lower() and timestamp > last_paid:
-            last_paid = timestamp
+            last_paid = dateparser.parse(line[line.find(':')-2:line.find(" --")])
+        elif "[Manual Adjustment]" in line:
+            seconds = int(line[line.find(']')+2:].strip())
+            adjustments += seconds
+            logger.debug("Added %d to adjustments." % seconds)
+        timestamp = dateparser.parse(line[line.find(':')-2:line.find(" --")])
         if closed and not line.startswith("-- Starting"):
             continue
         elif line.startswith("-- Starting"):
@@ -276,12 +287,12 @@ def get_spans(lines):
             closed = True
         else:
             spans[-1].append((timestamp, line[line.find(" -- ")+4:line.find(" ::: ")], line[line.find(" ::: "):]))
-    return (spans, last_paid)
+    return (spans, adjustments, last_paid)
 
 def command_summarize(args):
     total_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
     logger.debug(len(total_log))
-    spans, last_paid = get_spans(total_log)
+    spans, adjustments, last_paid = get_spans(total_log)
     logger.debug(len(spans))
     if args.timerange:
         start_time, end_time = parse_timerange(args.timerange, last_paid)
@@ -311,6 +322,10 @@ def command_summarize(args):
         hours = delta.total_seconds()/3600.
         total_hours += hours
         print "Worked from %s to %s\n  -- Total %.3f hours." % (format_timestamp(st_time), format_timestamp(e_time), hours)
+    if adjustments > 0:
+        adj_hours = adjustments/60./60.
+        print "Manual adjustments totaling %.2f hours." % adj_hours
+        total_hours += adj_hours
     if args.timerange:
         print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(start_time, True), format_timestamp(end_time, True), total_hours)
     else:
@@ -358,6 +373,11 @@ def command_analyze(args):
     print "Time spent per window name:"
     for win_name, time_len in sorted(window_histogram.items(), cmp=lambda e1, e2: cmp(e1[1], e2[1]), reverse=True):
         print "%s\t%s" % (time_len, win_name)
+
+def command_manual(args):
+    timerange = parse_timerange(args.time)
+    td = timerange[1]-timerange[0]
+    write_manual_adjustment(td)
 
 def command_test(args):
     print args
@@ -407,6 +427,10 @@ if __name__ == "__main__":
     parser_analyze = subparsers.add_parser('analyze', help='More detailed analysis of time use.')
     parser_analyze.add_argument('timerange', nargs='?', help='Time range to analyze. Accepts absolute dates, relative dates in 1w2d3h (weeks/days/hours) format, and ranges of either or both.')
     parser_analyze.set_defaults(func=command_analyze)
+    
+    parser_manual = subparsers.add_parser('manual', help='Add or subtract time manually.')
+    parser_manual.add_argument('time', nargs='?', help='Amount of time to add, in 1w1d1h1m format.')
+    parser_manual.set_defaults(func=command_manual)
     
     parser_test = subparsers.add_parser('test', help='Internal test.')
     parser_test.set_defaults(func=command_test)
