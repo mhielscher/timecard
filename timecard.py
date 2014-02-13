@@ -263,7 +263,7 @@ def get_spans(lines):
     spans = []
     adjustments = 0
     closed = True
-    last_paid = datetime.datetime(datetime.MINYEAR, 1, 1)
+    last_paid = datetime.datetime(1900, 1, 1)
     for line in lines:
         logger.debug(line)
         #if " -- " not in line:
