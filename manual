@@ -1,0 +1,7 @@
+#!/bin/sh
+
+if [ -n "$1" ]; then
+    python timecard.py -f ~/Dropbox/therms.log manual "$1"
+else
+    echo "Missing time argument."
+fi
