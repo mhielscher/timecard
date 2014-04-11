@@ -14,11 +14,95 @@ import time
 import argparse
 import datetime
 import re
+import ctypes
+import yaml
 from dateutil import parser as dateparser
 import screenshot
-#import pynotify
-from gi.repository import Gtk, GLib, Wnck
+from gi.repository import Gtk, GLib, Wnck, Notify
 from sh import ps
+
+class XScreenSaverInfo( ctypes.Structure):
+    """ typedef struct { ... } XScreenSaverInfo; """
+    _fields_ = [('window',      ctypes.c_ulong), # screen saver window
+                ('state',       ctypes.c_int),   # off,on,disabled
+                ('kind',        ctypes.c_int),   # blanked,internal,external
+                ('since',       ctypes.c_ulong), # milliseconds
+                ('idle',        ctypes.c_ulong), # milliseconds
+                ('event_mask',  ctypes.c_ulong)] # events
+
+#########
+# Config
+#########
+
+screenshot_types = {
+    'all': screenshot.ENTIRE_DESKTOP,
+    'active-window': screenshot.ACTIVE_WINDOW,
+    'active-monitor': screenshot.ACTIVE_MONITOR,
+    'cursor-monitor': screenshot.CURSOR_MONITOR
+}
+
+default_config = {
+    'logfile': 'timecard.log',
+    'screenshots': False,
+    'idle-time': 480 # seconds
+}
+
+config = {}
+
+def load_config(path=None):
+    global logger, config, default_config
+    if path:
+        try:
+            config = yaml.load(open(path, 'r'))
+        except IOError:
+            logger.error("Could not open config file %s", path)
+            sys.exit(1)
+    else:
+        try:
+            config = yaml.load(open(os.environ['HOME']+"/.config/timecard/timecard.conf", 'r'))
+        except IOError:
+            try:
+                config = yaml.load(open("/etc/timecard/timecard.conf", 'r'))
+            except IOError:
+                config = default_config
+    config = dict(default_config.items() + config.items())
+    if config['screenshots'] and config['screenshots']['type'] and \
+        config['screenshots']['type'] in screenshot_types:
+            config['screenshots']['type'] = screenshot_types[config['screenshots']['types']]
+
+def process_args(args):
+    global config
+    logger.debug(args)
+    
+    #if 'configfile' in args:
+    #    load_config(args.configfile)
+    
+    args.cardname = os.path.splitext(os.path.split(config['logfile'])[1])[0]
+    args.lockfile = os.path.join('/tmp', args.cardname+'.lock')
+    
+    config['logfile'] = config['logfile']
+    config['cardname'] = os.path.splitext(os.path.split(config['logfile'])[1])[0]
+    config['lockfile'] = os.path.join('/tmp', config['cardname']+'.lock')
+    
+    if 'screenshots' in args and args.screenshots != None:
+        config['screenshots'] = {}
+        config['screenshots']['directory'] = args.screenshots
+        config['screenshots']['type'] = args.screenshot_type
+        config['screenshots']['interval'] = args.screenshot_interval
+        config['screenshots']['notify'] = args.notify
+    
+    if 'idletime' in args:
+        config['idle-time'] = args.idletime
+    
+    logger.debug("Arguments:")
+    for arg, val in vars(args).items():
+        logger.debug("  %s = %s", arg, val)
+    logger.debug("Config:")
+    for key, val in config.items():
+        logger.debug("  %s = %s", key, val)
+    
+    logger.debug(yaml.dump(config, default_flow_style=False))
+
 
 registered_windows = set()
 
@@ -65,6 +149,21 @@ def focus_changed(screen, prev_window):
     #and process_cmd.split()[0].split('/')[-1] == "google-chrome":
         window.connect("name-changed", window_name_changed)
         registered_windows.add(window)
+
+def get_idle_time():
+    xlib = ctypes.cdll.LoadLibrary( 'libX11.so')
+    dpy = xlib.XOpenDisplay( os.environ['DISPLAY'])
+    root = xlib.XDefaultRootWindow( dpy)
+    xss = ctypes.cdll.LoadLibrary( 'libXss.so')
+    xss.XScreenSaverAllocInfo.restype = ctypes.POINTER(XScreenSaverInfo)
+    xss_info = xss.XScreenSaverAllocInfo()
+    xss.XScreenSaverQueryInfo( dpy, root, xss_info)
+    return xss_info.contents.idle/1000.
+
+def check_idle():
+    if get_idle_time() > config['idle-time']:
+        logger.debug("Exceeded idle time.")
+    return True
 
 def get_lock(lockfilename):
     if not os.path.isfile(lockfilename):
@@ -140,41 +239,37 @@ def parse_timerange(timerange, last_paid=None):
         
 
 def notify(title, message):
-    n = pynotify.Notification(title, message)
-    n.set_timeout(pynotify.EXPIRES_DEFAULT)
+    n = Notify.Notification.new(title, message)
+    #n.set_timeout(Notify.EXPIRES_DEFAULT)
     n.show()
     time.sleep(delay)
     n.close()
 
 def start_log():
-    global args
-    f = open(args.filepath, 'a')
+    f = open(config['logfile'], 'a')
     print >>f, "-- Starting log at %s --" % (get_current_timestamp())
     logger.debug("-- Starting log at %s --", get_current_timestamp())
     f.close()
     
 def write_note(note):
-    global args
-    f = open(args.filepath, 'a')
+    f = open(config['logfile'], 'a')
     print >>f, "%s -- [Note] %s" % (get_current_timestamp(), note)
     f.close()
 
 def write_manual_adjustment(td):
-    global args
-    f = open(args.filepath, 'a')
+    f = open(config['logfile'], 'a')
     print >>f, "%s -- [Manual Adjustment] %d" % (get_current_timestamp(), td.seconds)
     f.close()
 
 def monitor(command, window_name):
-    global args
-    f = open(args.filepath, 'a')
+    f = open(config['logfile'], 'a')
     print >>f, "%s -- %s ::: %s" % (get_current_timestamp(), command, window_name)
     logger.debug("%s -- %s ::: %s" % (get_current_timestamp(), command, window_name))
     f.close()
 
 def close_log():
     global args
-    f = open(args.filepath, 'a')
+    f = open(config['logfile'], 'a')
     print >>f, "-- Closing log at %s --" % (get_current_timestamp())
     logger.debug("-- Closing log at %s --", get_current_timestamp())
     f.close()
@@ -184,7 +279,7 @@ def stop_monitoring(signum, frame):
         logger.debug("Got %s." % ("SIGTERM" if signum==signal.SIGTERM else "SIGINT"))
     if signum in (signal.SIGTERM, signal.SIGINT):
         close_log()
-        if release_lock(args.lockfile):
+        if release_lock(config['lockfile']):
             sys.exit(0)
         else:
             print >>sys.stderr, "Failed to release lock."
@@ -194,13 +289,13 @@ def stop_monitoring(signum, frame):
 # Commands
 
 def command_start(args):
-    if get_lock(args.lockfile):
+    if get_lock(config['lockfile']):
         logger.error("Timecard is already locked.")
         sys.exit(1)
     
     if args.verbose >= 2:
         # Debug mode: -vv
-        if not lock_timecard(os.getpid(), args.lockfile):
+        if not lock_timecard(os.getpid(), config['lockfile']):
             logger.error("Unable to create lock file.")
             sys.exit(1)
         print "Clocked in at %s." % (datetime.datetime.now().strftime("%H:%M:%S, %a %b %d, %Y"))
@@ -210,7 +305,7 @@ def command_start(args):
         pid = os.fork()
         if pid > 0:
             logger.info("Parent reports child pid=%d", pid)
-            if not lock_timecard(pid, args.lockfile):
+            if not lock_timecard(pid, config['lockfile']):
                 os.kill(pid, signal.SIGTERM)
                 logger.error("Unable to create lock file.")
                 sys.exit(1)
@@ -238,14 +333,15 @@ def run_child(args):
     screen = Wnck.Screen.get_default()
     screen.connect("active-window-changed", focus_changed)
     screen.connect("application-closed", application_closed)
-    if args.screenshots:
-            GLib.timeout_add_second(args.interval, screenshot.take_screenshot, os.path.join(args.screenshots, get_current_timestamp(True)), target=args.screenshot_type)
+    if config['screenshots']:
+            GLib.timeout_add_seconds(config['screenshots']['interval'], screenshot.take_screenshot, os.path.join(config['screenshots']['directory'], get_current_timestamp(True)), target=config['screenshots']['type'])
+    GLib.timeout_add_seconds(10, check_idle)
     
     logger.debug("Going into main loop.")
     Gtk.main()
 
 def command_stop(args):
-    pid = get_lock(args.lockfile)
+    pid = get_lock(config['lockfile'])
     if not pid:
         logger.error("Could not get a valid PID from lock file.")
         sys.exit(1)
@@ -261,7 +357,7 @@ def command_note(args):
 
 def get_spans(lines):
     spans = []
-    adjustments = 0
+    adjustments = []
     closed = True
     last_paid = datetime.datetime(1900, 1, 1)
     for line in lines:
@@ -269,13 +365,13 @@ def get_spans(lines):
         #if " -- " not in line:
         #    logger.debug('" -- " not found in "%s"' % (line))
         #    continue
+        timestamp = dateparser.parse(line[line.find(':')-2:line.find(" --")])
         if "[Note]" in line and "got paid" in line.lower() and timestamp > last_paid:
-            last_paid = dateparser.parse(line[line.find(':')-2:line.find(" --")])
+            last_paid = timestamp
         elif "[Manual Adjustment]" in line:
             seconds = int(line[line.find(']')+2:].strip())
-            adjustments += seconds
+            adjustments.append((timestamp, seconds))
             logger.debug("Added %d to adjustments." % seconds)
-        timestamp = dateparser.parse(line[line.find(':')-2:line.find(" --")])
         if closed and not line.startswith("-- Starting"):
             continue
         elif line.startswith("-- Starting"):
@@ -290,7 +386,7 @@ def get_spans(lines):
     return (spans, adjustments, last_paid)
 
 def command_summarize(args):
-    total_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
+    total_log = map(lambda l: l.strip(), open(config['logfile'], 'r').readlines())
     logger.debug(len(total_log))
     spans, adjustments, last_paid = get_spans(total_log)
     logger.debug(len(spans))
@@ -298,6 +394,7 @@ def command_summarize(args):
         start_time, end_time = parse_timerange(args.timerange, last_paid)
         logger.debug("start_time: '%s', end_time: '%s'", start_time, end_time)
         spans = filter(lambda s: s[0][0]>start_time, spans)
+        adjustments = filter(lambda a: a[0]>start_time, adjustments)
     total_hours = 0.0
     for span in spans:
         st_time = span[0][0]
@@ -322,8 +419,8 @@ def command_summarize(args):
         hours = delta.total_seconds()/3600.
         total_hours += hours
         print "Worked from %s to %s\n  -- Total %.3f hours." % (format_timestamp(st_time), format_timestamp(e_time), hours)
-    if adjustments > 0:
-        adj_hours = adjustments/60./60.
+    if adjustments:
+        adj_hours = sum(a[1] for a in adjustments)/60./60.
         print "Manual adjustments totaling %.2f hours." % adj_hours
         total_hours += adj_hours
     if args.timerange:
@@ -332,7 +429,7 @@ def command_summarize(args):
         print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(spans[0][0][0], True), format_timestamp(spans[-1][-1][0], True), total_hours)
 
 def command_analyze(args):
-    raw_log = map(lambda l: l.strip(), open(args.filepath, 'r').readlines())
+    raw_log = map(lambda l: l.strip(), open(config['logfile'], 'r').readlines())
     raw_log = filter(lambda l: len(l)>0, raw_log)
     last_paid = datetime.datetime(datetime.MINYEAR, 1, 1)
     parsed_log = []
@@ -380,7 +477,9 @@ def command_manual(args):
     write_manual_adjustment(td)
 
 def command_test(args):
+    global config
     print args
+    print config
     screenshot.take_screenshot("tests/test.png", target=screenshot.ENTIRE_DESKTOP)
 
 
@@ -391,25 +490,25 @@ if __name__ == "__main__":
     # If called from cron, find first display.
     if not 'DISPLAY' in os.environ:
         os.environ['DISPLAY'] = find_display()
+    
+    load_config()
 
     argparser = argparse.ArgumentParser(description="Record or analyze time usage.")
     argparser.add_argument('-v', '--verbose', action='count', default=0, help="Display debug messages. -vv will disable forking.")
-    argparser.add_argument('-f', '--file', metavar='filepath', dest='filepath', default='timecard.log', help='Time log file.')
+    argparser.add_argument('-f', '--file', metavar='path', dest='logfile', default=config['logfile'], help='Time log file.')
+    #argparser.add_argument('-c', '--config-file', default=None, metavar='path', dest='configfile', help="Use the specified config file location.")
+    #argparser.add_argument('--config', nargs=2, action='append', metavar=('key', 'value'), help="Set config file options directly and persistently.")
+    argparser.add_argument('--save-config', action='store_true', help="Save arguments to this invocation as options in the config file.")
+    argparser.add_argument('-V', '--version', action='version', version='0.1a')
     subparsers = argparser.add_subparsers(help="Help for commands.")
     
-    screenshot_types = {
-        'all': screenshot.ENTIRE_DESKTOP,
-        'active-window': screenshot.ACTIVE_WINDOW,
-        'active-monitor': screenshot.ACTIVE_MONITOR,
-        'cursor-monitor': screenshot.CURSOR_MONITOR
-    }
-    
     parser_start = subparsers.add_parser('start', help='Clock in - begin recording into the timecard.')
-    parser_start.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None, const='screenshots', help='Take screenshots with every log entry. Optional: directory to store screenshots. Default: ./screenshots/')
-    parser_start.add_argument('--screenshot-type', choices=screenshot_types.keys(), default='active-monitor', help='Area to restrict screenshots to. Default: active-monitor')
-    parser_start.add_argument('-i', '--interval', metavar='interval', type=int, default=300, help='Seconds between screenshots. Default: 5 minutes.')
+    parser_start.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None if config['screenshots'] == False or config['screenshots']['interval'] == 0 else config['screenshots']['directory'], const=config['screenshots'] and config['screenshots']['directory'], help='Take screenshots with every log entry. Optional: directory to store screenshots.')
+    parser_start.add_argument('--screenshot-type', choices=screenshot_types.keys(), default='active-monitor' if not config['screenshots'] else config['screenshots']['type'], help='Area to restrict screenshots to.')
+    parser_start.add_argument('--screenshot-interval', metavar='interval', type=int, default=300 if not config['screenshots'] else config['screenshots']['interval'], help='Seconds between screenshots.')
+    parser_start.add_argument('-N', '--notify', metavar='warning', nargs='?', type=int, default=config['screenshots'] and config['screenshots']['notify'], const=default_config['screenshots'] and default_config['screenshots']['notify'], help='Notify [N] seconds before a screenshot.')
+    parser_start.add_argument('-i', '--idle-time', metavar='seconds', dest='idletime', type=int, default=config['idle-time'], help='Time in seconds before user becomes idle.')
     parser_start.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
-    parser_start.add_argument('-N', '--notify', metavar='warning', nargs='?', type=int, default=None, const=5, help='Notify [N] seconds before a screenshot. (default N=5)')
     parser_start.set_defaults(func=command_start)
     
     parser_stop = subparsers.add_parser('stop', help='Clock out - stop recording and close the timecard.')
@@ -437,15 +536,13 @@ if __name__ == "__main__":
     
     args = argparser.parse_args()
     
-    if 'screenshots' in args:
-        args.screenshot_type = screenshot_types[args.screenshot_type]
-
     debuglevel = {
         0: logging.ERROR,
         1: logging.INFO,
         2: logging.DEBUG
     }
-
+    args.verbose = min(args.verbose, max(debuglevel.keys()))
+    
     logger = logging.getLogger(__name__)
     logger.setLevel(debuglevel[args.verbose])
     ch = logging.StreamHandler()
@@ -456,10 +553,7 @@ if __name__ == "__main__":
     if 'screenshots' in args:
         screenshot.logger = logger
     
-    args.cardname = os.path.splitext(os.path.split(args.filepath)[1])[0]
-    args.lockfile = os.path.join('/tmp', args.cardname+'.lock')
-
-    logger.debug(args)
+    process_args(args)
     
     args.func(args)
     
