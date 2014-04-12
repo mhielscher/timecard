@@ -17,9 +17,9 @@ import re
 import ctypes
 import yaml
 from dateutil import parser as dateparser
-import screenshot
 from gi.repository import Gtk, GLib, Wnck, Notify
 from sh import ps
+import screenshot
 
 class XScreenSaverInfo( ctypes.Structure):
     """ typedef struct { ... } XScreenSaverInfo; """
@@ -31,7 +31,7 @@ class XScreenSaverInfo( ctypes.Structure):
                 ('event_mask',  ctypes.c_ulong)] # events
 
 #########
-# Config
+# Constants and default config
 #########
 
 screenshot_types = {
@@ -41,55 +41,72 @@ screenshot_types = {
     'cursor-monitor': screenshot.CURSOR_MONITOR
 }
 
+config_paths = [
+    os.environ['HOME']+'/.config/timecard/timecard.conf',
+    '/etc/timecard/timecard.conf'
+]
+
 default_config = {
     'logfile': 'timecard.log',
     'screenshots': False,
-    'idle-time': 480 # seconds
+    'idle-time': 480, # seconds
 }
 
-config = {}
-
-def load_config(path=None):
-    global logger, config, default_config
-    if path:
+def load_config(paths, default=default_config):
+    """Load a YAML configuration file into a dict.
+    
+    Arguments:
+        paths -- list of str, defining paths to test for config files.
+        default -- default config dict to merge with parsed config.
+    """
+    config = None
+    loaded_path = None
+    for path in paths:
         try:
-            config = yaml.load(open(path, 'r'))
+            config = dict(default.items() + yaml.load(open(path, 'r')).items())
+            loaded_path = path
+        except yaml.YAMLError:
+            print "Invalid config syntax in %s" % (path,)
+            continue
         except IOError:
-            logger.error("Could not open config file %s", path)
-            sys.exit(1)
-    else:
-        try:
-            config = yaml.load(open(os.environ['HOME']+"/.config/timecard/timecard.conf", 'r'))
-        except IOError:
-            try:
-                config = yaml.load(open("/etc/timecard/timecard.conf", 'r'))
-            except IOError:
-                config = default_config
-    config = dict(default_config.items() + config.items())
-    if config['screenshots'] and config['screenshots']['type'] and \
-        config['screenshots']['type'] in screenshot_types:
-            config['screenshots']['type'] = screenshot_types[config['screenshots']['types']]
+            continue
+    if not config:
+        config = dict(default)
+    
+    # Convert screenshot-type from string to int/enum
+    if config['screenshots'] and config['screenshots']['type'] and config['screenshots']['type'] in screenshot_types:
+        config['screenshots']['type'] = screenshot_types[config['screenshots']['types']]
+    
+    return (loaded_path, config)
 
-def process_args(args):
-    global config
+def save_config(path, config):
+    open(path, 'w').write(yaml.dump(config, default_flow_style=False))
+
+def process_args(args, config):
     logger.debug(args)
     
-    #if 'configfile' in args:
-    #    load_config(args.configfile)
-    
-    args.cardname = os.path.splitext(os.path.split(config['logfile'])[1])[0]
-    args.lockfile = os.path.join('/tmp', args.cardname+'.lock')
-    
-    config['logfile'] = config['logfile']
+    config['logfile'] = args.logfile
     config['cardname'] = os.path.splitext(os.path.split(config['logfile'])[1])[0]
     config['lockfile'] = os.path.join('/tmp', config['cardname']+'.lock')
     
-    if 'screenshots' in args and args.screenshots != None:
-        config['screenshots'] = {}
-        config['screenshots']['directory'] = args.screenshots
-        config['screenshots']['type'] = args.screenshot_type
-        config['screenshots']['interval'] = args.screenshot_interval
-        config['screenshots']['notify'] = args.notify
+    if 'screenshots' in args:
+        if not args.screenshots:
+            config['screenshots'] = False
+        elif not config['screenshots']:
+            config['screenshots'] = {}
+            config['screenshots']['directory'] = args.screenshot_dir
+            config['screenshots']['type'] = args.screenshot_type
+            config['screenshots']['interval'] = args.screenshot_interval
+            config['screenshots']['notify'] = args.notify
+        else:
+            if args.screenshot_dir != None:
+                config['screenshots']['directory'] = args.screenshot_dir
+            if args.screenshot_type != None:
+                config['screenshots']['type'] = args.screenshot_type
+            if args.screenshot_interval != None:
+                config['screenshots']['interval'] = args.screenshot_interval
+            if args.notify != None:
+                config['screenshots']['notify'] = args.notify
     
     if 'idletime' in args:
         config['idle-time'] = args.idletime
@@ -102,6 +119,8 @@ def process_args(args):
         logger.debug("  %s = %s", key, val)
     
     logger.debug(yaml.dump(config, default_flow_style=False))
+    
+    return config
 
 
 registered_windows = set()
@@ -322,6 +341,9 @@ def run_child(args):
     time.sleep(2)
     start_log()
     
+    if config['screenshots'] and 'notify' in config['screenshots']:
+        Notify.init('Timecard')
+    
     if args.note:
         write_note(args.note)
     
@@ -483,31 +505,34 @@ def command_test(args):
     screenshot.take_screenshot("tests/test.png", target=screenshot.ENTIRE_DESKTOP)
 
 
+def parse_initial_args(argv):
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('-V', '--version', action='version', version='0.1a')
+    parser.add_argument('-v', '--verbose', action='count', default=0, help="Display debug messages. -vv will disable forking.")
+    parser.add_argument('-c', '--config-file', default=None, metavar='path', dest='configfile', help="Use the specified config file location.")
+    return parser.parse_known_args(args=argv)
 
-### Main script ###
-
-if __name__ == "__main__":
-    # If called from cron, find first display.
-    if not 'DISPLAY' in os.environ:
-        os.environ['DISPLAY'] = find_display()
-    
-    load_config()
-
+def parse_all_args(argv):
     argparser = argparse.ArgumentParser(description="Record or analyze time usage.")
-    argparser.add_argument('-v', '--verbose', action='count', default=0, help="Display debug messages. -vv will disable forking.")
-    argparser.add_argument('-f', '--file', metavar='path', dest='logfile', default=config['logfile'], help='Time log file.')
-    #argparser.add_argument('-c', '--config-file', default=None, metavar='path', dest='configfile', help="Use the specified config file location.")
-    #argparser.add_argument('--config', nargs=2, action='append', metavar=('key', 'value'), help="Set config file options directly and persistently.")
-    argparser.add_argument('--save-config', action='store_true', help="Save arguments to this invocation as options in the config file.")
+    
+    # Duplicated arguments from parse_initial_args() for help generation
     argparser.add_argument('-V', '--version', action='version', version='0.1a')
+    argparser.add_argument('-v', '--verbose', action='count', default=0, help="Display debug messages. -vv will disable forking.")
+    argparser.add_argument('-c', '--config-file', metavar='path', dest='configfile', help="Use the specified config file location.")
+    
+    argparser.add_argument('--save-config', action='store_true', help="Save arguments to this invocation as options in the config file.")
+    argparser.add_argument('-f', '--file', metavar='path', dest='logfile', default=config['logfile'], help='Time log file.')
+    argparser.add_argument('-d', '--display', help="Manually define the X display to use.")
+    #argparser.add_argument('--config', nargs=2, action='append', metavar=('key', 'value'), help="Set config file options directly and persistently.")
     subparsers = argparser.add_subparsers(help="Help for commands.")
     
     parser_start = subparsers.add_parser('start', help='Clock in - begin recording into the timecard.')
-    parser_start.add_argument('-s', '--screenshots', metavar='dir', nargs='?', default=None if config['screenshots'] == False or config['screenshots']['interval'] == 0 else config['screenshots']['directory'], const=config['screenshots'] and config['screenshots']['directory'], help='Take screenshots with every log entry. Optional: directory to store screenshots.')
-    parser_start.add_argument('--screenshot-type', choices=screenshot_types.keys(), default='active-monitor' if not config['screenshots'] else config['screenshots']['type'], help='Area to restrict screenshots to.')
-    parser_start.add_argument('--screenshot-interval', metavar='interval', type=int, default=300 if not config['screenshots'] else config['screenshots']['interval'], help='Seconds between screenshots.')
-    parser_start.add_argument('-N', '--notify', metavar='warning', nargs='?', type=int, default=config['screenshots'] and config['screenshots']['notify'], const=default_config['screenshots'] and default_config['screenshots']['notify'], help='Notify [N] seconds before a screenshot.')
-    parser_start.add_argument('-i', '--idle-time', metavar='seconds', dest='idletime', type=int, default=config['idle-time'], help='Time in seconds before user becomes idle.')
+    parser_start.add_argument('-s', '--screenshots', action='store_true', help='Take screenshots with every log entry.')
+    parser_start.add_argument('--screenshot-dir', help="Directory to store screenshots.")
+    parser_start.add_argument('--screenshot-type', choices=screenshot_types.keys(), help='Area to restrict screenshots to.')
+    parser_start.add_argument('--screenshot-interval', metavar='interval', type=int, help='Seconds between screenshots.')
+    parser_start.add_argument('-N', '--notify', metavar='warning', nargs='?', type=int, help='Notify [N] seconds before a screenshot.')
+    parser_start.add_argument('-i', '--idle-time', metavar='seconds', dest='idletime', type=int, help='Time in seconds before user becomes idle.')
     parser_start.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
     parser_start.set_defaults(func=command_start)
     
@@ -534,26 +559,49 @@ if __name__ == "__main__":
     parser_test = subparsers.add_parser('test', help='Internal test.')
     parser_test.set_defaults(func=command_test)
     
-    args = argparser.parse_args()
-    
+    return argparser.parse_args(argv)
+
+def setup_logging(verbose=0):
     debuglevel = {
         0: logging.ERROR,
         1: logging.INFO,
         2: logging.DEBUG
     }
-    args.verbose = min(args.verbose, max(debuglevel.keys()))
+    verbose = min(verbose, max(debuglevel.keys()))
     
     logger = logging.getLogger(__name__)
-    logger.setLevel(debuglevel[args.verbose])
+    logger.setLevel(debuglevel[verbose])
     ch = logging.StreamHandler()
-    ch.setLevel(debuglevel[args.verbose])
+    ch.setLevel(debuglevel[verbose])
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     logger.addHandler(ch)
-    if 'screenshots' in args:
+    return logger
+
+### Main script ###
+
+if __name__ == "__main__":
+    # Parse arguments that need to take effect ASAP
+    init_opts, argv = parse_initial_args(sys.argv[1:])
+    logger = setup_logging(init_opts.verbose)
+    
+    if init_opts.configfile != None:
+        config_paths = [init_opts.configfile] + config_paths
+    config_path, config = load_config(config_paths)
+    
+    args = parse_all_args(argv)
+    config = process_args(args, config)
+    if args.save_config:
+        save_config(config_path, config)
+    
+    if config['screenshots']:
         screenshot.logger = logger
     
-    process_args(args)
+    if args.display != None:
+        os.environ['DISPLAY'] = args.display
+    elif not 'DISPLAY' in os.environ:
+        # If called from cron, find first display.
+        os.environ['DISPLAY'] = find_display()
     
     args.func(args)
     
