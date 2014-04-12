@@ -388,7 +388,7 @@ def get_spans(lines):
         #    logger.debug('" -- " not found in "%s"' % (line))
         #    continue
         timestamp = dateparser.parse(line[line.find(':')-2:line.find(" --")])
-        if "[Note]" in line and "got paid" in line.lower() and timestamp > last_paid:
+        if "[Note]" in line and "[submitted]" in line.lower() and timestamp > last_paid:
             last_paid = timestamp
         elif "[Manual Adjustment]" in line:
             seconds = int(line[line.find(']')+2:].strip())
@@ -466,7 +466,7 @@ def command_analyze(args):
         
         timestamp, info = line.split(' -- ', 1)
         if info.startswith("[Note]"):
-            if "got paid" in line.lower() and timestamp > last_paid:
+            if "[submitted]" in line.lower() and timestamp > last_paid:
                 last_paid = timestamp
             continue
         command, window_name = info.split(' ::: ', 1)
@@ -497,6 +497,12 @@ def command_manual(args):
     timerange = parse_timerange(args.time)
     td = timerange[1]-timerange[0]
     write_manual_adjustment(td)
+
+def command_submit(args):
+    close_log()
+    write_note("[submitted]")
+    open_log()
+    print "Hours submitted at %s." % (get_current_timestamp())
 
 def command_test(args):
     global config
@@ -555,6 +561,9 @@ def parse_all_args(argv):
     parser_manual = subparsers.add_parser('manual', help='Add or subtract time manually.')
     parser_manual.add_argument('time', nargs='?', help='Amount of time to add, in 1w1d1h1m format.')
     parser_manual.set_defaults(func=command_manual)
+    
+    parser_submit = subparsers.add_parser('submit', help="Submit your hours and start a new pay period.")
+    parser_submit.set_defaults(func=command_submit)
     
     parser_test = subparsers.add_parser('test', help='Internal test.')
     parser_test.set_defaults(func=command_test)
