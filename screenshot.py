@@ -33,6 +33,13 @@ def get_active_monitor(root=None):
 def take_screenshot(filepath, target=ACTIVE_MONITOR, fmt="png", scale=1.0, area=(0,0,0,0), fmt_options={}):
     """Take a screenshot of the desired target area."""
     logger.debug("Taking screenshot (target=%d)." % target)
+    
+    # Allow callable so filepath can be calculated on the fly.
+    try:
+        filepath = filepath()
+    except TypeError:
+        pass
+    
     root = Gdk.Screen.get_default()
     root_win = root.get_root_window()
     active = get_active_window(root)
@@ -70,7 +77,11 @@ def take_screenshot(filepath, target=ACTIVE_MONITOR, fmt="png", scale=1.0, area=
     else:
         if not filepath.endswith('.'+fmt):
             filepath += '.'+fmt
-    if (pb != None):
+    
+    if pb == None:
+        logger.error("Failed to save screenshot to %s." % filepath)
+        return False
+    else:
         logger.debug("Saving screenshot to %s." % filepath)
         try:
             pb.savev(filepath, fmt, fmt_options.keys(), fmt_options.values())
@@ -78,9 +89,6 @@ def take_screenshot(filepath, target=ACTIVE_MONITOR, fmt="png", scale=1.0, area=
             logger.error("Failed to save screenshot to %s: %s." % (filepath, e))
             return False
         return True
-    else:
-        logger.error("Failed to save screenshot to %s." % filepath)
-        return False
 
 
 if __name__ == "__main__":

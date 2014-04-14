@@ -49,7 +49,7 @@ config_paths = [
 default_config = {
     'logfile': 'timecard.log',
     'screenshots': False,
-    'idle-time': 480, # seconds
+    'idle-time': 480 # seconds
 }
 
 def load_config(paths, default=default_config):
@@ -108,7 +108,7 @@ def process_args(args, config):
             if args.notify != None:
                 config['screenshots']['notify'] = args.notify
     
-    if 'idletime' in args:
+    if 'idletime' in args and args.idletime != None:
         config['idle-time'] = args.idletime
     
     logger.debug("Arguments:")
@@ -180,7 +180,7 @@ def get_idle_time():
     return xss_info.contents.idle/1000.
 
 def check_idle():
-    if get_idle_time() > config['idle-time']:
+    if get_idle_time() > config['idle-time']*1000:
         logger.debug("Exceeded idle time.")
     return True
 
@@ -257,12 +257,12 @@ def parse_timerange(timerange, last_paid=None):
     return timestamp_range
         
 
-def notify(title, message):
-    n = Notify.Notification.new(title, message)
-    #n.set_timeout(Notify.EXPIRES_DEFAULT)
+def notify():
+    n = Notify.Notification.new("Screenshot", "Screenshot will be taken in %d seconds..." % (config['screenshots']['notify']), 'dialog-information')
+    n.set_timeout((config['screenshots']['notify']-1)*1000)
     n.show()
-    time.sleep(delay)
-    n.close()
+    #GLib.timeout_add_seconds(config['screenshots']['notify'], lambda: n.close() and False)
+    return True
 
 def start_log():
     f = open(config['logfile'], 'a')
@@ -356,8 +356,12 @@ def run_child(args):
     screen.connect("active-window-changed", focus_changed)
     screen.connect("application-closed", application_closed)
     if config['screenshots']:
-            GLib.timeout_add_seconds(config['screenshots']['interval'], screenshot.take_screenshot, os.path.join(config['screenshots']['directory'], get_current_timestamp(True)), target=config['screenshots']['type'])
-    GLib.timeout_add_seconds(10, check_idle)
+        if config['screenshots']['notify']:
+            GLib.timeout_add_seconds(config['screenshots']['interval'], notify)
+            GLib.timeout_add_seconds(config['screenshots']['notify'], lambda: GLib.timeout_add_seconds(config['screenshots']['interval'], screenshot.take_screenshot, lambda: os.path.join(config['screenshots']['directory'], get_current_timestamp(True)), target=config['screenshots']['type']) and False)
+        else:
+            GLib.timeout_add_seconds(config['screenshots']['interval'], screenshot.take_screenshot, lambda: os.path.join(config['screenshots']['directory'], get_current_timestamp(True)), target=config['screenshots']['type'])
+    GLib.timeout_add_seconds(5, check_idle)
     
     logger.debug("Going into main loop.")
     Gtk.main()
@@ -520,18 +524,18 @@ def parse_initial_args(argv):
 
 def parse_all_args(argv):
     argparser = argparse.ArgumentParser(description="Record or analyze time usage.")
-    
+
     # Duplicated arguments from parse_initial_args() for help generation
     argparser.add_argument('-V', '--version', action='version', version='0.1a')
     argparser.add_argument('-v', '--verbose', action='count', default=0, help="Display debug messages. -vv will disable forking.")
     argparser.add_argument('-c', '--config-file', metavar='path', dest='configfile', help="Use the specified config file location.")
-    
+
     argparser.add_argument('--save-config', action='store_true', help="Save arguments to this invocation as options in the config file.")
     argparser.add_argument('-f', '--file', metavar='path', dest='logfile', default=config['logfile'], help='Time log file.')
     argparser.add_argument('-d', '--display', help="Manually define the X display to use.")
     #argparser.add_argument('--config', nargs=2, action='append', metavar=('key', 'value'), help="Set config file options directly and persistently.")
     subparsers = argparser.add_subparsers(help="Help for commands.")
-    
+
     parser_start = subparsers.add_parser('start', help='Clock in - begin recording into the timecard.')
     parser_start.add_argument('-s', '--screenshots', action='store_true', help='Take screenshots with every log entry.')
     parser_start.add_argument('--screenshot-dir', help="Directory to store screenshots.")
@@ -598,7 +602,8 @@ if __name__ == "__main__":
         config_paths = [init_opts.configfile] + config_paths
     config_path, config = load_config(config_paths)
     
-    args = parse_all_args(argv)
+    cmd_args = parse_all_args(argv)
+    args = argparse.Namespace(**dict(vars(cmd_args).items() + vars(init_opts).items()))
     config = process_args(args, config)
     if args.save_config:
         save_config(config_path, config)
