@@ -41,6 +41,11 @@ screenshot_types = {
     'cursor-monitor': screenshot.CURSOR_MONITOR
 }
 
+idle_actions = {
+    'warning': lambda t: notify('Idle Warning', 'You have been idle for %d minute%s.' % (t/60, '' if int(t/60)==1 else 's')),
+    'stop': lambda t: stop_monitoring(signal.SIGTERM, None)
+}
+
 config_paths = [
     os.environ['HOME']+'/.config/timecard/timecard.conf',
     '/etc/timecard/timecard.conf'
@@ -49,7 +54,10 @@ config_paths = [
 default_config = {
     'logfile': 'timecard.log',
     'screenshots': False,
-    'idle-time': 480 # seconds
+    'idle': {
+        'time': 480, #seconds
+        'action': 'warning'
+    }
 }
 
 def load_config(paths, default=default_config):
@@ -73,9 +81,17 @@ def load_config(paths, default=default_config):
     if not config:
         config = dict(default)
     
-    # Convert screenshot-type from string to int/enum
-    if config['screenshots'] and config['screenshots']['type'] and config['screenshots']['type'] in screenshot_types:
-        config['screenshots']['type'] = screenshot_types[config['screenshots']['types']]
+    # Convert string constants into int constants
+    if config['screenshots'] and config['screenshots']['type']:
+        if config['screenshots']['type'] in screenshot_types:
+            config['screenshots']['type'] = screenshot_types[config['screenshots']['types']]
+        else:
+            config['screenshots'] = False
+    if config['idle'] and config['idle']['action']:
+        if config['idle']['action'] in idle_actions:
+            config['idle']['action'] = idle_actions[config['idle']['action']]
+        else:
+            config['idle'] = False
     
     return (loaded_path, config)
 
@@ -95,21 +111,27 @@ def process_args(args, config):
         elif not config['screenshots']:
             config['screenshots'] = {}
             config['screenshots']['directory'] = args.screenshot_dir
-            config['screenshots']['type'] = args.screenshot_type
+            config['screenshots']['type'] = screenshot_types.get(args.screenshot_type, 'active-monitor')
             config['screenshots']['interval'] = args.screenshot_interval
             config['screenshots']['notify'] = args.notify
         else:
             if args.screenshot_dir != None:
                 config['screenshots']['directory'] = args.screenshot_dir
-            if args.screenshot_type != None:
-                config['screenshots']['type'] = args.screenshot_type
+            if args.screenshot_type in screenshot_types:
+                config['screenshots']['type'] = screenshot_types[args.screenshot_type]
             if args.screenshot_interval != None:
                 config['screenshots']['interval'] = args.screenshot_interval
             if args.notify != None:
                 config['screenshots']['notify'] = args.notify
     
     if 'idletime' in args and args.idletime != None:
-        config['idle-time'] = args.idletime
+        if config['idle']:
+            config['idle']['time'] = args.idletime
+        elif 'idle_action' in args and args.idle_action in idle_actions:
+            config['idle'] = {'time': args.idletime, 'action': idle_actions[args.idle_action]} # BUG
+    if 'idle_action' in args and args.idle_action in idle_actions:
+        if config['idle']:
+            config['idle']['action'] = idle_actions[args.idle_action]
     
     logger.debug("Arguments:")
     for arg, val in vars(args).items():
@@ -180,8 +202,10 @@ def get_idle_time():
     return xss_info.contents.idle/1000.
 
 def check_idle():
-    if get_idle_time() > config['idle-time']*1000:
-        logger.debug("Exceeded idle time.")
+    if config['idle']:
+        if get_idle_time() > config['idle']['time']:
+            logger.debug("Exceeded idle time.")
+            config['idle']['action'](get_idle_time())
     return True
 
 def get_lock(lockfilename):
@@ -257,9 +281,9 @@ def parse_timerange(timerange, last_paid=None):
     return timestamp_range
         
 
-def notify():
-    n = Notify.Notification.new("Screenshot", "Screenshot will be taken in %d seconds..." % (config['screenshots']['notify']), 'dialog-information')
-    n.set_timeout((config['screenshots']['notify']-1)*1000)
+def notify(title, notification, timeout=Notify.EXPIRES_DEFAULT):
+    n = Notify.Notification.new(title, notification, 'dialog-information')
+    n.set_timeout(timeout)
     n.show()
     #GLib.timeout_add_seconds(config['screenshots']['notify'], lambda: n.close() and False)
     return True
@@ -341,8 +365,7 @@ def run_child(args):
     time.sleep(2)
     start_log()
     
-    if config['screenshots'] and 'notify' in config['screenshots']:
-        Notify.init('Timecard')
+    Notify.init('Timecard')
     
     if args.note:
         write_note(args.note)
@@ -357,11 +380,11 @@ def run_child(args):
     screen.connect("application-closed", application_closed)
     if config['screenshots']:
         if config['screenshots']['notify']:
-            GLib.timeout_add_seconds(config['screenshots']['interval'], notify)
+            GLib.timeout_add_seconds(config['screenshots']['interval'], notify, "Screenshot", "Screenshot will be taken in %d seconds..." % (config['screenshots']['notify']), (config['screenshots']['notify']-1)*1000)
             GLib.timeout_add_seconds(config['screenshots']['notify'], lambda: GLib.timeout_add_seconds(config['screenshots']['interval'], screenshot.take_screenshot, lambda: os.path.join(config['screenshots']['directory'], get_current_timestamp(True)), target=config['screenshots']['type']) and False)
         else:
             GLib.timeout_add_seconds(config['screenshots']['interval'], screenshot.take_screenshot, lambda: os.path.join(config['screenshots']['directory'], get_current_timestamp(True)), target=config['screenshots']['type'])
-    GLib.timeout_add_seconds(5, check_idle)
+    GLib.timeout_add_seconds(15, check_idle)
     
     logger.debug("Going into main loop.")
     Gtk.main()
@@ -543,6 +566,7 @@ def parse_all_args(argv):
     parser_start.add_argument('--screenshot-interval', metavar='interval', type=int, help='Seconds between screenshots.')
     parser_start.add_argument('-N', '--notify', metavar='warning', nargs='?', type=int, help='Notify [N] seconds before a screenshot.')
     parser_start.add_argument('-i', '--idle-time', metavar='seconds', dest='idletime', type=int, help='Time in seconds before user becomes idle.')
+    parser_start.add_argument('--idle-action', choices=idle_actions.keys(), help='Action to take when idle.')
     parser_start.add_argument('-n', '--note', metavar='note', help='Add a note to this action.')
     parser_start.set_defaults(func=command_start)
     
