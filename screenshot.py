@@ -30,11 +30,14 @@ def get_active_monitor(root=None):
     else:
         return -1
 
-def take_screenshot(filepath, target=ACTIVE_MONITOR, fmt="png", scale=1.0, area=(0,0,0,0), fmt_options={}):
+def take_screenshot(filepath, target=ACTIVE_MONITOR, fmt="png", scale=1.0, area=(0,0,0,0), fmt_options=None):
     """Take a screenshot of the desired target area."""
     logger.debug("Taking screenshot (target=%d)." % target)
+    # Avoid persistent mutable default parameters
+    if fmt_options == None:
+        fmt_options = {}
     
-    # Allow callable so filepath can be calculated on the fly.
+    # Allow callable so filepath can be calculated on the fly from a timer.
     try:
         filepath = filepath()
     except TypeError:
