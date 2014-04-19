@@ -19,7 +19,7 @@ import ctypes
 import yaml
 from dateutil import parser as dateparser
 from gi.repository import Gtk, GLib, Wnck, Notify
-from sh import ps
+from sh import ps, beep
 import screenshot
 
 class XScreenSaverInfo( ctypes.Structure):
@@ -259,6 +259,18 @@ def format_timestamp(dt, compact=False):
 def get_current_timestamp(compact=False):
     return format_timestamp(datetime.datetime.now(), compact=compact)
 
+def parse_timedelta(tds):
+    quanta = filter(len, re.split(r'(\d+[wdhms])', tds))
+    quanta = {q[-1]: int(q[:-1]) for q in quanta}
+    for k in ('w', 'd', 'h', 'm', 's'):
+        if k not in quanta:
+            quanta[k] = 0
+    logger.debug(quanta)
+    quanta['d'] = quanta['w']*7 + quanta['d']
+    quanta['s'] = quanta['h']*60*60 + quanta['m']*60 + quanta['s']
+    logger.debug(quanta)
+    return datetime.timedelta(days=quanta['d'], seconds=quanta['s'])
+
 def parse_timerange(timerange, last_paid=None):
     timerange = timerange.split('-')
     if len(timerange) == 1:
@@ -272,17 +284,8 @@ def parse_timerange(timerange, last_paid=None):
             timestamp_range.append(datetime.datetime.combine(datetime.date.today(), datetime.time.min))
         elif item.lower() in ('lastpaid', 'last paid', 'last_paid'):
             timestamp_range.append(last_paid)
-        elif re.match(r'(\d+[wdhm])+', item):
-            quanta = filter(len, re.split(r'(\d+[wdhm])', item))
-            quanta = {q[-1]: int(q[:-1]) for q in quanta}
-            for k in ('w', 'd', 'h', 'm'):
-                if k not in quanta:
-                    quanta[k] = 0
-            logger.debug(quanta)
-            quanta['d'] = quanta['w']*7 + quanta['d']
-            quanta['s'] = quanta['h']*60*60 + quanta['m']*60
-            logger.debug(quanta)
-            delta = datetime.timedelta(days=quanta['d'], seconds=quanta['s'])
+        elif re.match(r'(\d+[wdhms])+', item):
+            delta = parse_timedelta(item)
             timestamp_range.append(datetime.datetime.now() - delta)
         else:
             try:
@@ -559,6 +562,27 @@ def command_submit(args):
     open_log()
     print "Hours submitted at %s." % (get_current_timestamp())
 
+def command_timer(args):
+    td = parse_timedelta(args.time)
+    print "Timer started for %s." % (str(td))
+    pid = os.fork()
+    if pid > 0:
+        logger.info("Timer started with pid=%d", pid)
+        sys.exit(0)
+    else:
+        Notify.init("Timer")
+        
+        def end_timer():
+            if args.message:
+                notify("Timecard Timer", args.message)
+            else:
+                notify("Timecard Timer", "Timer for %s is up." % (str(td)))
+            beep("-f", "1350", "-r", "2", "-d", "35", "-l", "100")
+        
+        logger.debug("Setting timer for %d seconds", td.seconds)
+        GLib.timeout_add_seconds(td.seconds, end_timer)
+        Gtk.main()
+
 def command_test(args):
     global config
     print args
@@ -620,6 +644,11 @@ def parse_all_args(argv):
     
     parser_submit = subparsers.add_parser('submit', help="Submit your hours and start a new pay period.")
     parser_submit.set_defaults(func=command_submit)
+    
+    parser_timer = subparsers.add_parser('timer', help="Set a timer.")
+    parser_timer.add_argument('time', help="Amount of time to time.")
+    parser_timer.add_argument('message', nargs='?', default=None, help="Message to display when the timer is up.")
+    parser_timer.set_defaults(func=command_timer)
     
     parser_test = subparsers.add_parser('test', help='Internal test.')
     parser_test.set_defaults(func=command_test)
