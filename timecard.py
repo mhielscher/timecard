@@ -57,6 +57,11 @@ default_config = {
     'idle': {
         'time': 480, #seconds
         'action': 'warning'
+    },
+    'rounding': {
+        'type': 'up',
+        'when': 'invoice',
+        'increment': 1.0
     }
 }
 
@@ -207,6 +212,19 @@ def check_idle():
             logger.debug("Exceeded idle time.")
             config['idle']['action'](get_idle_time())
     return True
+
+def round_hours(hours, minutes=None):
+    if minutes:
+        hours += minutes/60.
+    if 'rounding' not in config or not config['rounding']:
+        return hours
+    incr_per_int = 1./config['rounding']['increment']
+    if config['rounding']['type'] == 'up':
+        return math.ceil(hours*incr_per_int)/incr_per_int
+    elif config['rounding']['type'] == 'down':
+        return math.floor(hours*incr_per_int)/incr_per_int
+    elif config['rounding']['type'] == 'nearest':
+        return round(hours*incr_per_int, 0)/incr_per_int
 
 def get_lock(lockfilename):
     if not os.path.isfile(lockfilename):
