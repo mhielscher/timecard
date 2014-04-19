@@ -14,6 +14,7 @@ import time
 import argparse
 import datetime
 import re
+import math
 import ctypes
 import yaml
 from dateutil import parser as dateparser
@@ -57,6 +58,11 @@ default_config = {
     'idle': {
         'time': 480, #seconds
         'action': 'warning'
+    },
+    'rounding': {
+        'type': 'up',
+        'when': 'invoice',
+        'increment': 1.0
     }
 }
 
@@ -207,6 +213,19 @@ def check_idle():
             logger.debug("Exceeded idle time.")
             config['idle']['action'](get_idle_time())
     return True
+
+def round_hours(hours, minutes=None):
+    if minutes:
+        hours += minutes/60.
+    if 'rounding' not in config or not config['rounding']:
+        return hours
+    incr_per_int = 1./config['rounding']['increment']
+    if config['rounding']['type'] == 'up':
+        return math.ceil(hours*incr_per_int)/incr_per_int
+    elif config['rounding']['type'] == 'down':
+        return math.floor(hours*incr_per_int)/incr_per_int
+    elif config['rounding']['type'] == 'nearest':
+        return round(hours*incr_per_int, 0)/incr_per_int
 
 def get_lock(lockfilename):
     if not os.path.isfile(lockfilename):
@@ -445,6 +464,7 @@ def command_summarize(args):
         spans = filter(lambda s: s[0][0]>start_time, spans)
         adjustments = filter(lambda a: a[0]>start_time, adjustments)
     total_hours = 0.0
+    billed_hours = 0.0
     for span in spans:
         st_time = span[0][0]
         e_time = span[-1][0]
@@ -467,15 +487,23 @@ def command_summarize(args):
             delta = e_time - st_time
         hours = delta.total_seconds()/3600.
         total_hours += hours
-        print "Worked from %s to %s\n  -- Total %.3f hours." % (format_timestamp(st_time), format_timestamp(e_time), hours)
+        if config.get('rounding', None) and config['rounding']['when'] == 'clockout':
+            rounded_hours = round_hours(hours)
+            billed_hours += rounded_hours
+            print "Worked from %s to %s\n  -- Total %.3f hours (billed %.3f hours)." % (format_timestamp(st_time), format_timestamp(e_time), hours, rounded_hours)
+        else:
+            billed_hours += hours
+            print "Worked from %s to %s\n  -- Total %.3f hours (billed %.3f hours)." % (format_timestamp(st_time), format_timestamp(e_time), hours, hours)
     if adjustments:
         adj_hours = sum(a[1] for a in adjustments)/60./60.
         print "Manual adjustments totaling %.2f hours." % adj_hours
         total_hours += adj_hours
+    if config.get('rounding', None) and config['rounding']['when'] == 'invoice':
+        billed_hours = round_hours(billed_hours)
     if args.timerange:
-        print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(start_time, True), format_timestamp(end_time, True), total_hours)
+        print "\nTotal time worked from %s to %s:\n    %.3f hours (%.3f billed)" % (format_timestamp(start_time, True), format_timestamp(end_time, True), total_hours, billed_hours)
     else:
-        print "\nTotal time worked from %s to %s:\n    %.3f hours" % (format_timestamp(spans[0][0][0], True), format_timestamp(spans[-1][-1][0], True), total_hours)
+        print "\nTotal time worked from %s to %s:\n    %.3f hours (%.3f billed)" % (format_timestamp(spans[0][0][0], True), format_timestamp(spans[-1][-1][0], True), total_hours, billed_hours)
 
 def command_analyze(args):
     raw_log = map(lambda l: l.strip(), open(config['logfile'], 'r').readlines())
