@@ -1,7 +1,13 @@
 #!/bin/sh
 
+CARD="timecard"
+if [ -n "$2" ]; then
+    CARD=$1
+    shift
+fi
+
 if [ -n "$1" ]; then
-    python timecard.py -f ~/Dropbox/therms.log summarize "$1"
+    python timecard.py -f cards/$CARD.log summarize "$1"
 else
-    python timecard.py -f ~/Dropbox/therms.log summarize
+    python timecard.py -f cards/$CARD.log summarize
 fi

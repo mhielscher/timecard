@@ -6,4 +6,4 @@ if [ -n "$1" ]; then
     shift
 fi
 
-python timecard.py -f cards/$CARD.log note "$*"
+python timecard.py -f cards/$CARD.log submit

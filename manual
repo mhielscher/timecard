@@ -1,7 +1,13 @@
 #!/bin/sh
 
+CARD="timecard"
 if [ -n "$1" ]; then
-    python timecard.py -f ~/Dropbox/therms.log manual "$1"
+    CARD=$1
+    shift
+fi
+
+if [ -n "$1" ]; then
+    python timecard.py -f cards/$CARD.log manual "$1"
 else
     echo "Missing time argument."
 fi

@@ -1,7 +1,13 @@
 #!/bin/sh
 
+CARD="timecard"
 if [ -n "$1" ]; then
-    python timecard.py -f ~/Dropbox/therms.log start -n "$*"
+    CARD=$1
+    shift
+fi
+
+if [ -n "$1"]; then
+    python timecard.py -f cards/$CARD.log start -n "$*"
 else
-    python timecard.py -f ~/Dropbox/therms.log start
+    python timecard.py -f cards/$CARD.log start
 fi

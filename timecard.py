@@ -90,7 +90,7 @@ def load_config(paths, default=default_config):
     # Convert string constants into int constants
     if config['screenshots'] and config['screenshots']['type']:
         if config['screenshots']['type'] in screenshot_types:
-            config['screenshots']['type'] = screenshot_types[config['screenshots']['types']]
+            config['screenshots']['type'] = screenshot_types[config['screenshots']['type']]
         else:
             config['screenshots'] = False
     if config['idle'] and config['idle']['action']:
@@ -205,9 +205,11 @@ def get_idle_time():
     xss.XScreenSaverAllocInfo.restype = ctypes.POINTER(XScreenSaverInfo)
     xss_info = xss.XScreenSaverAllocInfo()
     xss.XScreenSaverQueryInfo( dpy, root, xss_info)
+    xlib.XCloseDisplay(dpy);
     return xss_info.contents.idle/1000.
 
 def check_idle():
+    logger.debug("Checking idleness.")
     if config['idle']:
         if get_idle_time() > config['idle']['time']:
             logger.debug("Exceeded idle time.")
@@ -260,6 +262,7 @@ def get_current_timestamp(compact=False):
     return format_timestamp(datetime.datetime.now(), compact=compact)
 
 def parse_timedelta(tds):
+    tds = tds.strip('-')
     quanta = filter(len, re.split(r'(\d+[wdhms])', tds))
     quanta = {q[-1]: int(q[:-1]) for q in quanta}
     for k in ('w', 'd', 'h', 'm', 's'):
@@ -282,6 +285,8 @@ def parse_timerange(timerange, last_paid=None):
             timestamp_range.append(datetime.datetime.now())
         elif item.lower() == 'today':
             timestamp_range.append(datetime.datetime.combine(datetime.date.today(), datetime.time.min))
+        elif item.lower() == 'all':
+            timestamp_range.append(datetime.datetime.fromtimestamp(0))
         elif item.lower() in ('lastpaid', 'last paid', 'last_paid'):
             timestamp_range.append(last_paid)
         elif re.match(r'(\d+[wdhms])+', item):
@@ -502,7 +507,7 @@ def command_summarize(args):
         print "Manual adjustments totaling %.2f hours." % adj_hours
         total_hours += adj_hours
     if config.get('rounding', None) and config['rounding']['when'] == 'invoice':
-        billed_hours = round_hours(billed_hours)
+        billed_hours = round_hours(total_hours)
     if args.timerange:
         print "\nTotal time worked from %s to %s:\n    %.3f hours (%.3f billed)" % (format_timestamp(start_time, True), format_timestamp(end_time, True), total_hours, billed_hours)
     else:
@@ -557,9 +562,9 @@ def command_manual(args):
     write_manual_adjustment(td)
 
 def command_submit(args):
-    close_log()
+    #close_log()
     write_note("[submitted]")
-    open_log()
+    #open_log()
     print "Hours submitted at %s." % (get_current_timestamp())
 
 def command_timer(args):
